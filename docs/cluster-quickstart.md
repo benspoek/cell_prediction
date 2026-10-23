@@ -75,6 +75,30 @@ tail -f logs/pilot-JOBID.log
 If an earlier job fails, fix its error before resubmitting; dependent jobs do
 not become successful automatically. Finished target results can be resumed.
 
+### Recovery from a missing `CPP_ROOT` in a batch job
+
+If a job exits with `CPP_ROOT: Set CPP_ROOT before sbatch`, it stopped before
+Python or data preparation started. Update the scripts after the failed chain
+has finished; setup and downloads can be reused:
+
+```zsh
+cd ~/SMPC/cell_prediction
+git pull --ff-only
+export CPP_ROOT="$PWD"
+# Use this if you already created the local configuration:
+export CPP_CONFIG=configs/cluster.local.yaml
+# Offline wrapper tests: fake Slurm commands, no jobs or model downloads:
+.venvs/core/bin/python -m pytest -q tests/test_cluster_scripts.py
+zsh cluster/start.sh pilot
+```
+
+The launchers explicitly use `sbatch --export=ALL`; job steps use
+`srun --export=ALL`. Batch scripts also recover a missing `CPP_ROOT` from
+`SLURM_SUBMIT_DIR` when submitted from the project directory, and validate that
+directory before starting. This covers filtered submission environments without
+depending on the site's export defaults. A new pilot command submits a fresh
+prepare/splits/pilot chain; failed or dependency-cancelled jobs are not resumed.
+
 ## 4. Set the actual budget and start the benchmark
 
 After the pilot completes, check project permissions and available computing

@@ -99,9 +99,9 @@ Danach Datenaufbereitung und Splits als CPU-Jobs ausführen; jeweils erst nach
 erfolgreichem Abschluss des vorherigen Schritts fortfahren:
 
 ```zsh
-sbatch cluster/stage.sbatch prepare
+sbatch --export=ALL cluster/stage.sbatch prepare
 # Nach Abschluss:
-sbatch cluster/stage.sbatch splits --historical
+sbatch --export=ALL cluster/stage.sbatch splits --historical
 ```
 
 `prepare` prüft Ausgangsdimensionen und Kohortengröße, richtet alle Tabellen nach
@@ -117,8 +117,8 @@ Für die vollständige Matrix diese drei Schritte vorher abschließen:
 ```zsh
 CPP_ENV=core sbatch --export=ALL cluster/stage.sbatch \
   embed --encoder genept --device cpu
-sbatch cluster/encoder.sbatch uce
-sbatch cluster/encoder.sbatch nicheformer
+sbatch --export=ALL cluster/encoder.sbatch uce
+sbatch --export=ALL cluster/encoder.sbatch nicheformer
 ```
 
 Die GPU-Encoder-Jobs fordern jeweils eine GPU, 16 CPUs, 64 GB RAM und vier Stunden
@@ -131,15 +131,15 @@ eigenen Umgebung. Die Pilot-Jobs **nacheinander** starten, da sie dieselbe
 Timing-Datei ergänzen. Beispiel für die vollständige Matrix:
 
 ```zsh
-p1=$(sbatch --parsable cluster/pilot.sbatch tabpfn)
-p2=$(sbatch --parsable --dependency=afterok:"$p1" cluster/pilot.sbatch limix)
-sbatch --dependency=afterok:"$p2" cluster/pilot.sbatch kumo
+p1=$(sbatch --export=ALL --parsable cluster/pilot.sbatch tabpfn)
+p2=$(sbatch --export=ALL --parsable --dependency=afterok:"$p1" cluster/pilot.sbatch limix)
+sbatch --export=ALL --dependency=afterok:"$p2" cluster/pilot.sbatch kumo
 ```
 
 Für den ersten einfachen Benchmark genügt stattdessen:
 
 ```zsh
-sbatch cluster/pilot.sbatch tabpfn \
+sbatch --export=ALL cluster/pilot.sbatch tabpfn \
   --representations pca128 ion_channels authors25
 ```
 
@@ -201,9 +201,9 @@ Ressourcen benötigen; das ist im Pilot zu prüfen.
 
 ```zsh
 # Separater CPU-Job mit historischen Splits und historischer Gesamtmetrik:
-sbatch cluster/stage.sbatch historical --backend sklearn_compatible
+sbatch --export=ALL cluster/stage.sbatch historical --backend sklearn_compatible
 # Nach Abschluss der gewünschten korrigierten Benchmark-Jobs:
-sbatch cluster/stage.sbatch report
+sbatch --export=ALL cluster/stage.sbatch report
 ```
 
 `sklearn_compatible` rekonstruiert Sparse-RRR mit einem kompatiblen Optimierer.
