@@ -1,0 +1,78 @@
+schema_version: 1
+seed: 42
+paths:
+  raw_dir: data/raw
+  prepared_dir: data/processed
+  splits_dir: data/splits
+  embeddings_dir: embeddings
+  results_dir: results
+  cache_dir: cache
+data:
+  source_repo: berenslab/mini-atlas
+  source_commit: 3bf98a524b8e48aa8647e1b9ae8f2351d9c712c9
+  expected_raw_cells: 1329
+  expected_genes: 42466
+  expected_cohort_cells: 1219
+evaluation:
+  protocols: [cell_kfold, mouse_group_kfold]
+  n_splits: 10
+  representations: [pca128, ion_channels, authors25, genept, uce, nicheformer]
+  predictors: [tabpfn, limix, kumo, ridge, mean]
+  pca_components: 128
+  minimum_gene_cells: 10
+  inner_folds: 3
+  ridge_alphas: [0.1, 1.0, 10.0, 100.0, 1000.0]
+  bootstrap_samples: 1000
+  family_min_cells: 20
+  ion_channels_path: data/raw/ion-channel-genes-group-177.csv
+models:
+  tabpfn:
+    checkpoint: cache/models/tabpfn/tabpfn-v3.5-20260909.safetensors
+    n_estimators: 8
+    seed: 42
+  limix:
+    repo_dir: vendor/LimiX
+    checkpoint: cache/models/limix/LimiX-2.ckpt
+    inference_config: vendor/LimiX/config/reg_default_noretrieval_v2.json
+    n_estimators: 8
+    seed: 42
+  kumo:
+    size: large
+    checkpoint_dir: cache/models/kumo
+    n_estimators: 8
+    point_prediction: median
+    seed: 42
+embeddings:
+  genept:
+    vectors_path: cache/resources/genept_vectors.npz
+    orthologs_path: cache/resources/mouse_human_one2one.tsv
+    normalisation_total: 10000
+    pooling: gene_count_mean
+  uce:
+    repo_dir: vendor/UCE
+    checkpoint: cache/models/uce/33_layer.torch
+    resources_dir: cache/resources/uce
+    batch_size: 16
+    seed: 42
+  nicheformer:
+    checkpoint_dir: cache/models/nicheformer
+    technology_mean_path: cache/resources/nicheformer/dissociated_mean.npy
+    gene_mapping_path: cache/resources/nicheformer/mouse_to_model.tsv
+    gene_ids_path: cache/resources/mouse_gene_ids.tsv
+    assay_token: 18
+    batch_size: 16
+    seed: 42
+cluster:
+  account: thes2301
+  user: cx537120
+  cpu_partition: c23mm
+  gpu_partition: c23g
+  max_concurrent_gpu_jobs: 4
+  gpu_cpus: 8
+  gpu_memory: 32G
+  gpu_time: '06:00:00'
+  encoder_cpus: 16
+  encoder_memory: 64G
+  encoder_time: '04:00:00'
+  # Set this to the actual remaining project budget before a full submission.
+  remaining_gpu_hours: null

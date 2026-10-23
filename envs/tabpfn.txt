@@ -1,0 +1,3 @@
+# Python 3.12; set PIP_EXTRA_INDEX_URL if your cluster needs a specific CUDA wheel index.
+torch==2.9.1
+tabpfn==9.2.0

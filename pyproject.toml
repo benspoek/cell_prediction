@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=75", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cell-property-prediction"
+version = "0.1.0"
+description = "Reproducible Patch-seq electrophysiology benchmarks for Slurm clusters"
+requires-python = ">=3.11"
+dependencies = [
+  "numpy>=1.26,<3", "pandas>=2.2,<3", "scipy>=1.13,<2",
+  "scikit-learn>=1.6,<2", "PyYAML>=6,<7", "anndata>=0.11,<0.13",
+  "h5py>=3.11,<4", "huggingface-hub>=0.28,<2"
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8,<9", "ruff>=0.9"]
+tabpfn = ["tabpfn==9.2.0"]
+kumo = ["structured-data-models"]
+
+[project.scripts]
+cellbench = "cell_property_prediction.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+
+[tool.ruff]
+line-length = 110
+target-version = "py311"

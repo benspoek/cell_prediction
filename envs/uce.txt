@@ -1,0 +1,11 @@
+# Python 3.11 (upstream torch 2.1.1 has no Python 3.12 wheel).
+# Authentic UCE requirements; use a separate environment from tabular predictors.
+numpy==1.26.4
+scipy==1.14.1
+pandas==2.2.2
+tqdm==4.66.5
+torch==2.1.1
+scanpy==1.10.2
+accelerate==0.24.0
+requests==2.25.1
+urllib3==1.26.6

@@ -1,0 +1,8 @@
+# Python >=3.12. Install vendor/LimiX at the manifest-recorded Git commit after this file.
+# Optional flash-attn==2.8.3 must match this exact torch/CUDA/Python wheel combination.
+torch==2.9.1
+scipy==1.16.2
+einops==0.8.1
+nvtx==0.2.13
+packaging==25.0
+kditransform==1.2.0

@@ -1,0 +1,3 @@
+# Python 3.12. Local large/regressor.pt is supplied by prefetch-models.
+torch==2.9.1
+structured-data-models==0.2.1
