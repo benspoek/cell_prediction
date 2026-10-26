@@ -238,6 +238,35 @@ measurement. A changed compute setting, source input, embedding or model resourc
 requires an investigated fresh pilot; provenance errors should not be bypassed
 by editing saved fingerprints.
 
+### GenePT ZIP filename error during setup
+
+If setup failed with `GenePT archive must contain one exact model-3 vector pickle`,
+pull the fix before retrying. The published Zenodo v2 ZIP names its model-3
+payload `GenePT_gene_protein_embedding_model_3_text.pickle.` with a trailing
+period; the record description omits it. The loader accepts both exact names,
+checks the original published archive MD5, ignores macOS metadata, rejects
+ambiguous payloads, and records the actual archive member in provenance.
+
+When `setup && embeddings && pilots` stops at this error, the last two stages
+have not run. On the cluster, retry:
+
+```zsh
+cd ~/SMPC/cell_prediction
+git pull --ff-only
+export CPP_ROOT="$PWD"
+export CPP_CONFIG=configs/cluster.local.yaml
+zsh cluster/pending.sh setup &&
+zsh cluster/pending.sh embeddings &&
+zsh cluster/pending.sh pilots
+```
+
+Keep the same configuration and restore the Python/CUDA modules used by setup.
+The cached ZIP is checked and reused, and complete frozen LimiX/Kumo manifest
+entries are verified and reused. No data preparation, split generation, cache
+removal, or baseline rerun is needed. The remaining UCE/Nicheformer resources
+and model environments are installed before encoder/pilot jobs are submitted.
+The Hugging Face unauthenticated-request warning is separate from this error.
+
 Run the offline checks on a POSIX host with zsh (for example the cluster core
 environment). These tests use fake Slurm commands and do not start jobs or
 download models:

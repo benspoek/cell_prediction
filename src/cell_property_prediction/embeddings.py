@@ -15,7 +15,7 @@ import tarfile
 import time
 import zipfile
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 import numpy as np
 import pandas as pd
@@ -23,6 +23,9 @@ from scipy import sparse
 
 from .config import atomic_json, file_sha256, resolve
 from .models import _git_revision, _offline_environment, _resource, _version
+
+GENEPT_ARCHIVE_MD5 = "3f6ce4317e3a0091978ae5cb8fbf05a3"
+GENEPT_VECTOR_FILENAME = "GenePT_gene_protein_embedding_model_3_text.pickle"
 
 
 @dataclass(frozen=True)
@@ -417,15 +420,25 @@ def prefetch_genept(config: dict, *, root: Path) -> dict:
     with archive.open("rb") as handle:
         for block in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(block)
-    if digest.hexdigest() != "3f6ce4317e3a0091978ae5cb8fbf05a3":
+    if digest.hexdigest() != GENEPT_ARCHIVE_MD5:
         raise ValueError("GenePT archive differs from the published v2 MD5")
-    name = "GenePT_gene_protein_embedding_model_3_text.pickle"
+    name = GENEPT_VECTOR_FILENAME
     with zipfile.ZipFile(archive) as handle:
-        candidates = [member for member in handle.namelist() if Path(member).name == name]
+        # The published v2 ZIP has a trailing dot after .pickle, although the
+        # Zenodo description omits it. Write to our canonical local name.
+        members = [member for member in handle.infolist() if not member.is_dir()
+                   and "__MACOSX" not in PurePosixPath(member.filename).parts
+                   and not PurePosixPath(member.filename).name.startswith("._")]
+        candidates = [member for member in members
+                      if PurePosixPath(member.filename).name in {name, name + "."}]
         if len(candidates) != 1:
-            raise ValueError("GenePT archive must contain one exact model-3 vector pickle")
+            observed = [member.filename for member in members if ".pickle" in member.filename]
+            raise ValueError(f"GenePT archive must contain one exact model-3 vector pickle "
+                             f"({name} or {name}.); found {len(candidates)} matches. "
+                             f"Pickle members: {observed}")
+        member = candidates[0]
         raw = destination.parent / name
-        with handle.open(candidates[0]) as source, raw.open("wb") as output:
+        with handle.open(member) as source, raw.open("wb") as output:
             import shutil
             shutil.copyfileobj(source, output)
     names, vectors = load_genept_vectors(raw)
@@ -435,7 +448,8 @@ def prefetch_genept(config: dict, *, root: Path) -> dict:
     elif destination.resolve() != raw.resolve():
         import shutil
         shutil.copyfile(raw, destination)
-    return {"archive": record, "published_md5": digest.hexdigest(), "genes": len(names), "dimensions": 3072,
+    return {"archive": record, "archive_member": member.filename, "published_md5": digest.hexdigest(),
+            "genes": len(names), "dimensions": 3072,
             "vectors_path": str(destination), "vectors_sha256": file_sha256(destination)}
 
 
