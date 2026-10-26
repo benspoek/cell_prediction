@@ -26,7 +26,8 @@ def test_hvg_stage_has_both_inputs_all_models_and_existing_folds(tmp_path):
     assert json.loads(output.with_suffix(".json").read_text())["target_fits"] == 2040
     assert config_path.read_bytes() == before
     assert parser().parse_args(["jobs", "--stage", "hvg", "--output", str(output)]).stage == "hvg"
-    assert not {job["representation"] for job in create_jobs(config, tmp_path, "pending", tmp_path / "pending.tsv")} & {"hvg", "hvg_pca128"}
+    pending = create_jobs(config, tmp_path, "pending", tmp_path / "pending.tsv")
+    assert {tuple(job.values()) for job in jobs} <= {tuple(job.values()) for job in pending}
 
     pairs = sorted({(job["representation"], job["predictor"]) for job in jobs})
     pilot_path = tmp_path / "results/hvg_workflow/pilot/timings.json"

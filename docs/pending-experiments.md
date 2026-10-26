@@ -1,22 +1,29 @@
 # Continue the remaining experiments
 
 Use this workflow in the **existing cluster checkout** after the three simple
-TabPFN input/model pairs have completed. It adds the remaining 15 pairs, reuses
+TabPFN input/model pairs have completed. It adds the remaining 21 pairs, reuses
 the prepared cohort and saved folds, and keeps the original TabPFN predictions.
 All real data, model downloads, embedding generation, pilots, and evaluations
 stay on the cluster. Local checks use synthetic fixtures and fake Slurm commands.
 
 | Predictor | Inputs in this continuation | Pairs |
 |---|---|---:|
-| TabPFN 3.5 | GenePT, UCE, Nicheformer | 3 |
-| LimiX-2 | PCA128, ion channels, authors' 25 genes, GenePT, UCE, Nicheformer | 6 |
-| Kumo Tabular Large | All six inputs | 6 |
+| TabPFN 3.5 | GenePT, UCE, Nicheformer, HVG, HVG→PCA128 | 5 |
+| LimiX-2 | PCA128, ion channels, authors' 25 genes, GenePT, UCE, Nicheformer, HVG, HVG→PCA128 | 8 |
+| Kumo Tabular Large | All eight inputs | 8 |
 
 Each pair has two protocols with ten saved outer folds and 17 targets. The
-continuation therefore creates **300 array tasks and 5,100 target/fold fits**.
+continuation therefore creates **420 array tasks and 7,140 target/fold fits**.
 The three completed pairs already provide six protocol/method rows; the new
-pairs add 30, giving 36 rows in the final three-predictor comparison. These counts
+pairs add 42, giving 48 rows in the final three-predictor comparison. These counts
 exclude the separate ridge, mean, Sparse-RRR, and historical comparisons.
+
+This single production array includes the direct `hvg` and `hvg_pca128` inputs
+with every predictor. No separate `cluster/hvg.sh` submission is needed. The
+HVG inputs are prepared within each evaluation fold; only the existing three
+full-expression encoder jobs are required. HVG→encoder inputs remain a planned
+separate benchmark. Reports include both primary raw-scale macro R² and the
+secondary authors' joint R².
 
 Do not run `cluster/start.sh setup`, `prepare`, `splits`, or the `simple` stage
 again for this continuation. Do not change the prepared data, folds, original
@@ -59,6 +66,23 @@ jobs. `sbatch --export=ALL` and `srun --export=ALL` carry the selected environme
 into the jobs. The wrappers select the core environment for GenePT/reporting,
 the respective encoder environment for UCE/Nicheformer, and the predictor's own
 environment for each pilot and array task.
+
+### Existing setup completed, no jobs started
+
+For an existing checkout whose `pending.sh setup` has completed, update the
+source while no jobs are queued or running, then proceed directly to embeddings
+and the expanded pilots. Keep the existing snapshot, environments, resources,
+configuration and prepared data. No repeated setup is required:
+
+```zsh
+git pull --ff-only
+zsh cluster/pending.sh embeddings &&
+zsh cluster/pending.sh pilots
+```
+
+After the pilots succeed, update the current remaining quota and use the single
+`pending.sh submit --execute` command described below. Do not also submit
+`cluster/hvg.sh` for this combined run.
 
 ## 2. Snapshot the completed work and install only the new models
 
@@ -120,12 +144,14 @@ an active encoder job stops the launcher before it submits pilots.
 The three GPU pilots run serially:
 
 ```text
-unfinished encoders -> TabPFN (3 embedding inputs) -> LimiX (6 inputs) -> Kumo (6 inputs)
+unfinished encoders -> TabPFN (5 inputs) -> LimiX (8 inputs) -> Kumo (8 inputs)
 ```
 
 Each pilot measures two targets in the first saved cell fold. They append to
-`results/pending_workflow/pilot/timings.json`; their prediction files are in that
-same separate pilot directory. The original `results/pilot/` remains available.
+`results/pending_workflow/pilot_with_hvg/timings.json`; their prediction files are in that
+same separate pilot directory. The original `results/pilot/` and previous
+`results/pending_workflow/pilot/` remain available. The new directory prevents
+old 15-pair timings from being used for the expanded 21-pair matrix.
 Serial dependencies prevent multiple pilot jobs from writing the timing JSON at
 the same time. All three pilots use the unchanged base compute configuration.
 
@@ -174,12 +200,12 @@ unchanged.
 ## 5. Preview and submit the pending array
 
 ```zsh
-# Creates jobs/pending.tsv and prints the 300-task submission command:
+# Creates jobs/pending.tsv and prints the 420-task submission command:
 zsh cluster/pending.sh submit
 
 # Inspect the measured estimate separately if useful:
 CPP_ENV=core zsh cluster/run.sh budget --jobs jobs/pending.tsv \
-  --pilot results/pending_workflow/pilot/timings.json
+  --pilot results/pending_workflow/pilot_with_hvg/timings.json
 
 # Submits only after the measured pilot/current-quota check passes:
 zsh cluster/pending.sh submit --execute
@@ -191,7 +217,7 @@ pass before `sbatch` runs. Missing, stale, or incomplete pilot measurements and
 an unset/insufficient remaining quota block submission. The estimate uses the
 measured pilot with a factor-of-two margin.
 
-The array contains only the 15 pending input/model pairs: it excludes all three
+The array contains only the 21 pending input/model pairs: it excludes all three
 completed simple TabPFN pairs. It runs at most **four GPU tasks at once**, each
 handling one input/model/protocol/fold and all 17 targets. The pending launcher
 sets the concurrency to four even if a different `CPP_ARRAY_CONCURRENCY` was
@@ -206,7 +232,7 @@ zsh cluster/pending.sh report
 If the saved production array is active, the CPU report job receives an
 `afterok` dependency on the whole array. For a delayed report after the array
 has left the queue, the launcher requires `sacct` records confirming that every
-one of its 300 tasks completed with exit code `0:0`. It then submits the report
+one of its 420 tasks completed with exit code `0:0`. It then submits the report
 without a dependency on an expired ID. Missing accounting, failed tasks or an
 unknown production array stop report submission. Slurm documents the expiry
 restriction for successful-job dependencies in

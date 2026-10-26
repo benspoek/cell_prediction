@@ -45,7 +45,7 @@ def parser() -> argparse.ArgumentParser:
     pilot = sub.add_parser("pilot")
     pilot.add_argument("--predictors", nargs=1, choices=["tabpfn", "limix", "kumo"], required=True,
                        help="One model per invocation, using its isolated environment")
-    pilot.add_argument("--representations", nargs="+", default=["pca128", "ion_channels", "authors25", "genept", "uce", "nicheformer"])
+    pilot.add_argument("--representations", nargs="+", default=["pca128", "ion_channels", "authors25", "genept", "uce", "nicheformer", "hvg", "hvg_pca128"])
     pilot.add_argument("--targets", type=int, default=2)
     pilot.add_argument("--output", type=Path,
                        help="Timing JSON path; predictions use its parent (default: results_dir/pilot/timings.json)")

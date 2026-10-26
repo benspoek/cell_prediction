@@ -1,4 +1,4 @@
-# Additional HVG experiments
+# Standalone HVG subset
 
 This workflow adds two expression inputs for **TabPFN 3.5, LimiX-2, and Kumo
 Tabular Large**. It reuses the prepared 1,219-cell cohort, 17 targets, and the
@@ -10,10 +10,13 @@ saved ten-fold `cell_kfold` and `mouse_group_kfold` splits.
 | `hvg_pca128` | The same selected genes, scaled and reduced to at most 128 training-fitted principal components |
 
 There are 2 inputs × 3 predictors × 2 protocols × 10 folds = **120 array tasks**,
-with 17 target fits each (**2,040 fits**). This is an addition to the original
-six-input matrix, whose `full` and `pending` stages retain their existing
-360- and 300-task meanings. Together, all eight inputs across three models
-produce 48 protocol/input/model summary rows once all experiments finish.
+with 17 target fits each (**2,040 fits**). Both inputs are now included in the
+combined `pending` stage (420 tasks) and `full` stage (480 tasks). Use the
+[pending-experiment guide](pending-experiments.md) to run all remaining inputs
+and HVG together in one production submission. This standalone workflow is for
+running only the HVG subset; do not submit it alongside the combined pending
+array. All eight inputs across three models produce 48 protocol/input/model
+summary rows once the complete comparison finishes.
 
 ## Selection rule and interpretation
 

@@ -20,7 +20,9 @@ def create_jobs(config: dict, root: Path, stage: str, output: Path) -> list[dict
         # intact while evaluating both new inputs with every foundation model.
         representations, predictors = ["hvg", "hvg_pca128"], ["tabpfn", "limix", "kumo"]
     elif stage in {"full", "pending"}:
-        representations = config["evaluation"]["representations"]
+        # Include the two HVG inputs without changing the frozen base config.
+        representations = list(dict.fromkeys([*config["evaluation"]["representations"],
+                                               "hvg", "hvg_pca128"]))
         predictors = [p for p in config["evaluation"]["predictors"] if p in {"tabpfn", "limix", "kumo"}]
     elif stage == "baselines":
         representations = config["evaluation"]["representations"]

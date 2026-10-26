@@ -14,7 +14,7 @@ import pytest
 ZSH = shutil.which("zsh")
 pytestmark = pytest.mark.skipif(os.name == "nt" or ZSH is None, reason="Requires POSIX and zsh")
 STATE = "results/pending_workflow"
-PILOT = f"{STATE}/pilot/timings.json"
+PILOT = f"{STATE}/pilot_with_hvg/timings.json"
 
 
 @pytest.fixture
@@ -60,7 +60,7 @@ def pending_cluster(tmp_path):
         "        if job: print(f'{job}|RUNNING')\n"
         "elif command == 'sacct' and os.environ.get('MOCK_ACCOUNTING_SUCCESS'):\n"
         "    job = args[args.index('-j') + 1]\n"
-        "    count = int(os.environ.get('MOCK_ACCOUNTING_TASKS', '300'))\n"
+        "    count = int(os.environ.get('MOCK_ACCOUNTING_TASKS', '420'))\n"
         "    for index in range(count):\n"
         "        code = '1:0' if index == 2 and os.environ.get('MOCK_ACCOUNTING_BAD_EXIT') else '0:0'\n"
         "        print(f'{job}_{index}|COMPLETED|{code}')\n"
@@ -79,7 +79,7 @@ def pending_cluster(tmp_path):
         "    if args[0] == 'jobs':\n"
         "        target = root / args[args.index('--output') + 1]\n"
         "        target.parent.mkdir(exist_ok=True)\n"
-        "        count = 120 if args[args.index('--stage') + 1] == 'hvg' else 300\n"
+        "        count = 120 if args[args.index('--stage') + 1] == 'hvg' else 420\n"
         "        target.write_text('predictor\\n' + 'limix\\n' * count)\n"
         "    if args[0] == 'budget' and os.environ.get('MOCK_BUDGET_FAIL'):\n"
         "        print('measured estimate exceeds current remaining quota')\n"
@@ -197,13 +197,14 @@ def test_embeddings_and_serial_pilots_use_all_three_success_dependencies(pending
     assert "--dependency=afterok:101:102:103" in calls[3]["args"]
     assert "--dependency=afterok:104" in calls[4]["args"]
     assert "--dependency=afterok:105" in calls[5]["args"]
-    assert calls[3]["args"][-8:] == [
-        "cluster/pilot.sbatch", "tabpfn", "--representations", "genept", "uce", "nicheformer", "--output", PILOT,
+    assert calls[3]["args"][-10:] == [
+        "cluster/pilot.sbatch", "tabpfn", "--representations", "genept", "uce", "nicheformer",
+        "hvg", "hvg_pca128", "--output", PILOT,
     ]
     for call, model in zip(calls[4:], ("limix", "kumo")):
-        assert call["args"][-11:] == [
+        assert call["args"][-13:] == [
             "cluster/pilot.sbatch", model, "--representations", "pca128", "ion_channels", "authors25",
-            "genept", "uce", "nicheformer", "--output", PILOT,
+            "genept", "uce", "nicheformer", "hvg", "hvg_pca128", "--output", PILOT,
         ]
     for call in calls:
         assert {"--export=ALL", "--parsable"} <= set(call["args"])
@@ -257,11 +258,11 @@ def test_pilots_reuse_completed_embeddings_with_expired_saved_ids(pending_cluste
     assert not any(call["command"] == "squeue" for call in records(pending_cluster))
 
 
-def test_submission_defaults_to_300_job_preview_without_budget_or_sbatch(pending_cluster):
+def test_submission_defaults_to_420_job_preview_without_budget_or_sbatch(pending_cluster):
     result = invoke(pending_cluster, "submit", CPP_ARRAY_CONCURRENCY="20")
     assert result.returncode == 0, result.stderr
-    assert "0-299%4" in result.stdout
-    assert "Jobs: 300; target/fold fits: 5100" in result.stdout
+    assert "0-419%4" in result.stdout
+    assert "Jobs: 420; target/fold fits: 7140" in result.stdout
     calls = records(pending_cluster)
     assert [call["args"] for call in calls if call["command"] == "run"] == [
         ["jobs", "--stage", "pending", "--output", "jobs/pending.tsv"],
@@ -298,7 +299,7 @@ def test_execute_saves_array_id_and_report_waits_for_its_success(pending_cluster
     assert result.returncode == 0, result.stderr
     calls = submitted(pending_cluster)
     assert len(calls) == 2
-    assert "--array=0-299%4" in calls[0]["args"]
+    assert "--array=0-419%4" in calls[0]["args"]
     assert "--export=ALL" in calls[0]["args"]
     assert calls[0]["args"][-2:] == ["cluster/evaluate.sbatch", "jobs/pending.tsv"]
     assert "--dependency=afterok:101" in calls[1]["args"]
@@ -318,14 +319,14 @@ def test_delayed_report_verifies_every_array_task_without_expired_dependency(pen
     ]
 
 
-@pytest.mark.parametrize("successful_tasks", ["0", "299"])
+@pytest.mark.parametrize("successful_tasks", ["0", "300", "419"])
 def test_delayed_report_refuses_incomplete_or_missing_accounting(pending_cluster, successful_tasks):
     save_ids(pending_cluster, ("production", "1001"))
     result = invoke(
         pending_cluster, "report", MOCK_ACCOUNTING_SUCCESS="1", MOCK_ACCOUNTING_TASKS=successful_tasks,
     )
     assert result.returncode != 0
-    assert "does not confirm all 300 tasks" in result.stderr
+    assert "does not confirm all 420 tasks" in result.stderr
     assert submitted(pending_cluster) == []
 
 
@@ -333,7 +334,7 @@ def test_delayed_report_refuses_completed_task_with_nonzero_exit(pending_cluster
     save_ids(pending_cluster, ("production", "1001"))
     result = invoke(pending_cluster, "report", MOCK_ACCOUNTING_SUCCESS="1", MOCK_ACCOUNTING_BAD_EXIT="1")
     assert result.returncode != 0
-    assert "does not confirm all 300 tasks" in result.stderr
+    assert "does not confirm all 420 tasks" in result.stderr
     assert submitted(pending_cluster) == []
 
 
@@ -370,7 +371,7 @@ def test_unrelated_active_jobs_do_not_block_the_continuation(pending_cluster):
     save_ids(pending_cluster, ("production", "101"))
     result = invoke(pending_cluster, "submit", MOCK_ACTIVE_IDS="999", MOCK_QUEUE_STATES="RUNNING\n")
     assert result.returncode == 0, result.stderr
-    assert "0-299%4" in result.stdout
+    assert "0-419%4" in result.stdout
     assert submitted(pending_cluster) == []
 
 
@@ -426,3 +427,29 @@ def test_submit_rejects_missing_pilot_path(pending_cluster, args):
     assert result.returncode == 2
     assert "--pilot requires" in result.stderr
     assert records(pending_cluster) == []
+
+
+def test_combined_pilots_preserve_legacy_timing_file(pending_cluster):
+    old = pending_cluster[0] / STATE / "pilot/timings.json"
+    old.parent.mkdir()
+    old.write_text('{"fingerprint":"previous-source","runs":[]}\n')
+    before = old.read_bytes()
+    result = invoke(pending_cluster, "pilots")
+    assert result.returncode == 0, result.stderr
+    assert old.read_bytes() == before
+    calls = submitted(pending_cluster)
+    assert len(calls) == 3
+    assert all(call["args"][-2:] == ["--output", PILOT] for call in calls)
+    assert all("hvg" in call["args"] and "hvg_pca128" in call["args"] for call in calls)
+
+
+def test_combined_submit_creates_one_production_array_for_all_420_tasks(pending_cluster):
+    result = invoke(pending_cluster, "submit", "--execute")
+    assert result.returncode == 0, result.stderr
+    [array] = submitted(pending_cluster)
+    assert "--array=0-419%4" in array["args"]
+    assert array["args"][-2:] == ["cluster/evaluate.sbatch", "jobs/pending.tsv"]
+    budgets = [call for call in records(pending_cluster)
+               if call["command"] == "run" and call["args"][0] == "budget"]
+    assert len(budgets) == 1
+    assert budgets[0]["args"][3:5] == ["--pilot", PILOT]

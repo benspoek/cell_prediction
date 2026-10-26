@@ -27,10 +27,12 @@ if [[ "$PROFILE" == hvg ]]; then
     FETCH_MODELS=(limix kumo)
     BOOTSTRAP_MODELS=(limix kumo)
 else
-    EXPECTED_TASKS=300
+    EXPECTED_TASKS=420
+    # Keep timings from the old 15-pair continuation unchanged.
+    PILOT="$STATE/pilot_with_hvg/timings.json"
     ENCODERS=(genept uce nicheformer)
-    TABPFN_INPUTS=(genept uce nicheformer)
-    OTHER_INPUTS=(pca128 ion_channels authors25 genept uce nicheformer)
+    TABPFN_INPUTS=(genept uce nicheformer hvg hvg_pca128)
+    OTHER_INPUTS=(pca128 ion_channels authors25 genept uce nicheformer hvg hvg_pca128)
     FETCH_MODELS=(limix kumo genept uce nicheformer)
     BOOTSTRAP_MODELS=(limix kumo uce nicheformer)
 fi

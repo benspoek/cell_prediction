@@ -6,13 +6,15 @@ the [cluster quickstart](docs/cluster-quickstart.md). The committed entry point 
 
 After completing those three benchmarks, follow the
 [pending-experiment guide](docs/pending-experiments.md) to run the remaining
-15 input/model combinations with `zsh cluster/pending.sh`. It preserves the
-completed folds and submits a separate 300-task continuation array.
+21 input/model combinations with `zsh cluster/pending.sh`, including HVG and
+HVG→PCA128 for all three models. It preserves the completed folds and submits
+one combined 420-task continuation array.
 
-For the authors' approximately 1,000 highly variable genes and PCA128 of those
-genes, follow the [HVG experiment guide](docs/hvg-experiments.md). The additional
-`zsh cluster/hvg.sh` workflow evaluates both inputs with all three foundation
-models on the same saved cell and mouse-held-out folds (120 additional tasks).
+The combined pending workflow already includes the authors' approximately
+1,000 highly variable genes and PCA128 of those genes. The
+[HVG experiment guide](docs/hvg-experiments.md) describes their selection and
+the optional `zsh cluster/hvg.sh` standalone subset (120 tasks). A combined
+pending run needs no separate HVG submission.
 
 Reproduzierbarer Benchmark für die Vorhersage von 17 elektrophysiologischen
 Zelleigenschaften aus Einzelzell-Genexpression. Ausgangspunkt ist Scala et al.,
@@ -181,21 +183,23 @@ zsh cluster/run.sh budget --jobs jobs/full.tsv
 ```
 
 `simple` erzeugt 60 Jobs bzw. 1.020 Target/Fold-Kombinationen. `full` erzeugt
-360 Jobs bzw. 6.120 Kombinationen und enthält die einfachen Benchmarks bereits.
+480 Jobs bzw. 8.160 Kombinationen und enthält die einfachen Benchmarks bereits.
 Für die Fortsetzung eines abgeschlossenen `simple`-Laufs den
 [Pending-Workflow](docs/pending-experiments.md) verwenden: `pending` erzeugt nur
-die übrigen 300 Jobs bzw. 5.100 Fits. Seine separaten Piloten und Budgetprüfung
+die übrigen 420 Jobs bzw. 7.140 Fits einschließlich beider HVG-Eingaben. Seine separaten Piloten und Budgetprüfung
 verhindern, dass alte Pilotmessungen nach neuen Downloads weiterverwendet werden.
-`full` ist die vollständige 360-Job-Matrix, insbesondere für frische Läufe. Die Budgetschätzung ist konservativ
+`full` ist die vollständige 480-Job-Matrix, insbesondere für frische Läufe. Die Budgetschätzung ist konservativ
 (Pilotzeit × Targetanzahl × Faktor 2), ersetzt aber keine Messung der ganzen
 Laufzeit und des GPU-Speichers.
 
-`hvg` ergänzt die ursprüngliche Matrix um sechs weitere Eingabe/Modell-Paare,
-120 Jobs und 2.040 Target/Fold-Fits. Es ist ein eigener Zusatz zum unveränderten
-`full`- bzw. `pending`-Manifest. Die ursprünglichen sechs Eingaben plus beide
-HVG-Eingaben ergeben insgesamt acht Eingaben × drei Modelle × zwei Protokolle ×
-zehn Folds, also 480 Jobs. Für den zusätzlichen HVG-Lauf werden separate Piloten
-und ein eigenes Budget verwendet; die Anleitung steht im
+`hvg` ist die optionale Teilmenge mit sechs HVG-Eingabe/Modell-Paaren,
+120 Jobs und 2.040 Target/Fold-Fits. Beide HVG-Eingaben sind bereits im
+`full`- und `pending`-Manifest enthalten; für den kombinierten Pending-Lauf
+ist keine weitere HVG-Einreichung nötig. Insgesamt ergeben acht Eingaben ×
+drei Modelle × zwei Protokolle × zehn Folds 480 Jobs. Die kombinierte
+Fortsetzung verwendet neue Piloten unter
+`results/pending_workflow/pilot_with_hvg/`; ältere Pilotmessungen werden
+beibehalten. Die Anleitung für den optionalen HVG-Teillauf steht im
 [HVG experiment guide](docs/hvg-experiments.md).
 
 ```zsh
