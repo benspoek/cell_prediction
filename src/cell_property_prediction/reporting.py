@@ -9,6 +9,8 @@ import numpy as np
 import pandas as pd
 
 from .config import atomic_json, compute_config, file_sha256
+from .author_metrics import authors_joint_scores
+from .data import LOG_TARGETS
 from .evaluation import _atomic_csv, _canonical_hash, _load_table, _mouse_column, _path
 
 KEYS = ["protocol", "representation", "predictor"]
@@ -90,6 +92,7 @@ def report(config: dict, root: Path) -> dict:
     for protocol in config.get("evaluation", {}).get("protocols", []):
         source = _path(config, root, "splits_dir", "data/splits") / f"{protocol}.json"
         expected_splits[protocol] = json.loads(source.read_text(encoding="utf-8"))["folds"]
+        sources[str(source)] = file_sha256(source)
     for path in sorted(results.glob("*/*/*/fold_*/manifest.json")):
         manifest = json.loads(path.read_text(encoding="utf-8"))
         if manifest.get("status") != "complete":
@@ -149,7 +152,7 @@ def report(config: dict, root: Path) -> dict:
     mice = sorted(metadata.loc[sorted(expected_cells), mouse_column].astype(str).unique())
     rng = np.random.default_rng(int(config.get("seed", 42)))
     draws = rng.multinomial(len(mice), np.repeat(1 / len(mice), len(mice)), size=n_bootstrap)
-    target_rows, summary_rows, family_rows, bootstraps, point_r2 = [], [], [], {}, {}
+    target_rows, summary_rows, family_rows, joint_fold_rows, bootstraps, point_r2 = [], [], [], [], {}, {}
     family_column = next((name for name in ("rna_family", "RNA family", "RNA_family") if name in metadata), None)
     minimum_family = int(evaluation.get("family_min_cells", 20))
     for key, group in predictions.groupby(KEYS, sort=True):
@@ -174,6 +177,9 @@ def report(config: dict, root: Path) -> dict:
                    "expected_folds": len(expected_folds), "n_targets": len(target_names),
                    "n_targets_scored": int(valid.sum()), "macro_r2": float(values[valid].mean()) if valid.any() else np.nan,
                    "n_mice": group.mouse.nunique()}
+        joint_summary, joint_folds = authors_joint_scores(group, targets_table, expected_splits[key[0]], target_names)
+        summary.update(joint_summary)
+        joint_fold_rows.extend({**identity, **row} for row in joint_folds)
         if complete and n_bootstrap:
             samples = _bootstrap_r2(group, target_names, mice, draws)
             bootstraps[key] = samples
@@ -198,6 +204,8 @@ def report(config: dict, root: Path) -> dict:
     summary = summary.sort_values(["protocol", "complete_oof", "macro_r2"], ascending=[True, False, False])
     _atomic_csv(destination / "target_metrics.csv", target_metrics)
     _atomic_csv(destination / "summary.csv", summary)
+    _atomic_csv(destination / "authors_joint_r2_folds.csv", pd.DataFrame(joint_fold_rows,
+        columns=KEYS + ["fold", "authors_joint_r2", "sse", "sst", "n_predictions", "n_targets", "status", "reason"]))
     _atomic_csv(destination / "within_rna_family.csv", pd.DataFrame(family_rows,
         columns=KEYS + ["rna_family", "target", "complete_oof", "n", "r2", "mae", "pearson"]))
     differences = []
@@ -218,14 +226,24 @@ def report(config: dict, root: Path) -> dict:
                 "ci_low": low, "ci_high": high, "bootstrap_valid": usable, "n_mice": len(mice)})
     _atomic_csv(destination / "paired_differences.csv", pd.DataFrame(differences, columns=["protocol", "method_a", "method_b",
         "target", "r2_difference_a_minus_b", "ci_low", "ci_high", "bootstrap_valid", "n_mice"]))
-    output_names = ["oof_predictions.csv", "target_metrics.csv", "summary.csv", "within_rna_family.csv", "paired_differences.csv"]
+    output_names = ["oof_predictions.csv", "target_metrics.csv", "summary.csv", "authors_joint_r2_folds.csv",
+                    "within_rna_family.csv", "paired_differences.csv"]
     result = {"status": "complete", "config_sha256": config_hash, "n_fold_manifests": len(manifest_rows),
               "n_prediction_rows": len(predictions), "n_methods_complete_oof": int(summary.complete_oof.sum()),
               "primary_metric": "mean of per-target OOF R2 in raw physical units",
               "missing_label_policy": "finite observed pairs; undefined metrics remain missing",
               "bootstrap": {"unit": "mouse", "samples": n_bootstrap, "seed": int(config.get("seed", 42)),
                             "paired": True, "interval": "percentile 95%; fixed OOF predictions; no retraining"},
-              "historical_paper_score": "Reserved for the separate historical RRR reproduction; no proxy substituted",
+              "secondary_metrics": {"authors_joint_r2": {
+                  "definition": "equal-weight mean of fold (1 - joint standardized SSE / training-mean-centered test SST)",
+                  "target_names": target_names,
+                  "log_targets": [target for target in LOG_TARGETS if target in target_names],
+                  "cohort_scale": "standard deviation of each transformed observed target over the full cohort",
+                  "ddof": 0, "prediction_transform": "natural log for log_targets; identity for remaining targets",
+                  "split_policy": "actual saved evaluation folds; historical split quirk is not introduced",
+                  "invalid_policy": "all expected folds and target/cell pairs required; no clipping or dropping; status/reason recorded",
+                  "ranking": "primary raw-scale macro_r2 only", "bootstrap": "not calculated for this secondary metric"}},
+              "historical_paper_score": "Separate historical RRR reproduction; authors_joint_r2 applies its scoring definition to current saved splits",
               "source_sha256": sources,
               "outputs": {name: {"path": str(destination / name), "sha256": file_sha256(destination / name)}
                           for name in output_names}}

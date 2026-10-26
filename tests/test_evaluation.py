@@ -180,6 +180,19 @@ def test_report_full_oof_raw_metrics_and_paired_mouse_bootstrap(benchmark):
     assert "__macro__" in set(differences.target)
     assert (differences.n_mice == 6).all()
     assert (differences.bootstrap_valid > 0).all()
+    assert complete.authors_joint_r2.notna().all()
+    assert (complete.authors_joint_r2_status == "complete").all()
+    partial = summary.loc[~summary.complete_oof]
+    assert partial.authors_joint_r2.isna().all()
+    assert (partial.authors_joint_r2_status == "incomplete_oof").all()
+    joint_folds = pd.read_csv(root / "results/reports/authors_joint_r2_folds.csv")
+    for _, method in complete.iterrows():
+        selected_folds = joint_folds[(joint_folds.predictor == method.predictor) &
+                                     (joint_folds.protocol == method.protocol)]
+        assert len(selected_folds) == 2
+        assert method.authors_joint_r2 == pytest.approx(selected_folds.authors_joint_r2.mean())
+    assert manifest["secondary_metrics"]["authors_joint_r2"]["ddof"] == 0
+    assert "authors_joint_r2_folds.csv" in manifest["outputs"]
     families = pd.read_csv(root / "results/reports/within_rna_family.csv")
     assert set(families.rna_family) == {"family_a", "family_b"}
     oof = pd.read_csv(root / "results/reports/oof_predictions.csv")

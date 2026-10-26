@@ -244,6 +244,13 @@ Berichte erscheinen unter `results/reports/`: Vorhersagen pro Zelle und Target,
 R²/MAE/Pearson je Target, mittleres R² über die Targets, mausweise
 Bootstrap-Konfidenzintervalle, gepaarte Modellunterschiede und Ergebnisse innerhalb
 von RNA-Familien. Unvollständige OOF-Methoden werden markiert und nicht gerankt.
+Jeder Bericht enthält zusätzlich `authors_joint_r2` in `summary.csv` und
+prüfbare Fold-Werte in `authors_joint_r2_folds.csv`. Der Score verwendet die
+Autoren-Transformationen, globale Target-Standardabweichungen (ddof=0),
+Trainingsmittelwerte je Fold und gleich gewichtete Fold-Scores. Er wendet die
+Autorenmetrik auf die vorhandenen Splits an; die primäre Rangfolge basiert
+weiterhin auf dem mittleren R² in Originaleinheiten. Bestehende Vorhersagen
+lassen sich durch erneutes Ausführen von `report` ohne neue Modellläufe bewerten.
 Historische Ergebnisse und Pilotdaten werden getrennt gespeichert.
 
 ## Prüfung und Aufbau

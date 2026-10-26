@@ -139,6 +139,41 @@ OOF-Vorhersagen, nicht die zusätzliche Variation einer erneuten Modellanpassung
 mit anderen Fold-Zuordnungen. Berichte innerhalb von RNA-Familien verlangen
 mindestens 20 Zellen.
 
+Jeder moderne Bericht berechnet zusätzlich `authors_joint_r2` nach der
+Scoring-Definition der Autoren. Beobachtungen und Vorhersagen werden für AP
+coefficient of variation, ISI coefficient of variation und ISI adaptation index
+natürlich logarithmiert. Für jedes transformierte Target wird die
+Standardabweichung der beobachteten Werte über die gesamte Kohorte mit
+`ddof=0` berechnet. Pro gespeichertem Testfold gilt:
+
+```text
+SSE_fold = sum_over_test_cells_and_targets(((transformed_true - transformed_pred) / cohort_std)^2)
+SST_fold = sum_over_test_cells_and_targets(((transformed_true - mean_transformed_training_target) / cohort_std)^2)
+authors_joint_r2 = mean_over_all_expected_folds(1 - SSE_fold / SST_fold)
+```
+
+Alle Folds werden gleich gewichtet, auch bei unterschiedlichen Testgrößen.
+Die Mittelwerte im Nenner stammen aus den tatsächlich gespeicherten
+Trainings-IDs des jeweiligen Folds. Die globale Standardabweichung wird nur
+zur Bewertung verwendet und nicht an die Prädiktoren weitergegeben.
+
+Dieser zusätzliche Score wendet die Autorenmetrik auf die vorhandenen
+Zell- bzw. Mouse-held-out-Splits an; er ist keine exakte Reproduktion der
+historischen Evaluation. Der historische Integer-Divisions-Effekt wird dabei
+nicht eingeführt. Primär bleiben die 17 R²-Werte in Originaleinheiten und ihr
+Mittelwert; Rangfolge, Bootstrap-Intervalle und gepaarte Vergleiche bleiben auf
+dieser primären Skala.
+
+`summary.csv` enthält den zusätzlichen Score sowie Status, Grund und Anzahl
+verwendbarer Folds. `authors_joint_r2_folds.csv` speichert je Methode/Fold den
+Score, SSE, SST und den Validitätsstatus. Nur bei vollständigen Vorhersagen und
+allen gültigen Folds wird ein Gesamtwert ausgegeben. Nichtpositive Werte bei
+einer Log-Transformation, fehlende oder nicht endliche Werte, konstante
+Kohorten-Targets und ein nichtpositiver Fold-Nenner ergeben einen fehlenden
+Joint-Score mit Begründung. Es werden keine Werte beschnitten und keine
+Zellen, Targets oder Folds stillschweigend ausgeschlossen; die vorhandenen
+Originalskalen-Metriken bleiben verfügbar.
+
 Der historische Modus reproduziert die globale Gen-/Targetskalierung, die
 ursprüngliche Genwahl und den Seed-42-Permutationssplit mit ganzzahliger
 Fold-Länge 121. Dadurch sind 1.210 Zellen im Test und neun immer im Training.
