@@ -40,13 +40,15 @@ def parser() -> argparse.ArgumentParser:
     array.add_argument("--index", type=int, default=None)
     array.add_argument("--device", default="cuda")
     jobs = sub.add_parser("jobs")
-    jobs.add_argument("--stage", choices=["simple", "full", "baselines", "rrr"], default="simple")
+    jobs.add_argument("--stage", choices=["simple", "full", "pending", "baselines", "rrr"], default="simple")
     jobs.add_argument("--output", type=Path, required=True)
     pilot = sub.add_parser("pilot")
     pilot.add_argument("--predictors", nargs=1, choices=["tabpfn", "limix", "kumo"], required=True,
                        help="One model per invocation, using its isolated environment")
     pilot.add_argument("--representations", nargs="+", default=["pca128", "ion_channels", "authors25", "genept", "uce", "nicheformer"])
     pilot.add_argument("--targets", type=int, default=2)
+    pilot.add_argument("--output", type=Path,
+                       help="Timing JSON path; predictions use its parent (default: results_dir/pilot/timings.json)")
     pilot.add_argument("--device", default="cuda", choices=["cuda", "cuda:0"],
                        help="GPU budget pilots require the allocated CUDA device")
     budget = sub.add_parser("budget")
@@ -131,14 +133,18 @@ def main(argv: list[str] | None = None) -> int:
         pilot_config["evaluation"]["targets"] = list(TARGET_COLUMNS[:args.targets])
         if args.targets < 1 or args.targets > len(TARGET_COLUMNS):
             raise ValueError("Pilot targets must be between 1 and 17")
-        pilot_config["paths"]["results_dir"] = str(Path(config["paths"]["results_dir"]) / "pilot")
-        pilot_path = resolve(root, pilot_config["paths"]["results_dir"]) / "timings.json"
+        if args.output is None:
+            pilot_config["paths"]["results_dir"] = str(Path(config["paths"]["results_dir"]) / "pilot")
+            pilot_path = resolve(root, pilot_config["paths"]["results_dir"]) / "timings.json"
+        else:
+            pilot_path = resolve(root, args.output)
+            pilot_config["paths"]["results_dir"] = str(pilot_path.parent)
         signature = compute_fingerprint(config, root)
         result = {"runs": [], "fingerprint": signature, "pilot_targets": args.targets}
         if pilot_path.is_file():
             previous = json.loads(pilot_path.read_text(encoding="utf-8"))
             if previous.get("fingerprint") != signature:
-                raise ValueError("Pilot inputs/code changed; archive results/pilot before measuring again")
+                raise ValueError(f"Pilot inputs/code changed; archive {pilot_path.parent} before measuring again")
             if previous.get("pilot_targets") != args.targets:
                 raise ValueError("Pilot target count changed; use the original --targets value")
             result = previous

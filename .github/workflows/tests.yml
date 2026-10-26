@@ -1,0 +1,31 @@
+name: Synthetic pipeline checks
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7.1.0
+        with:
+          python-version: "3.12"
+      - name: Install zsh
+        run: sudo apt-get update && sudo apt-get install -y zsh
+      - name: Install core test dependencies
+        run: python -m pip install -e ".[dev]"
+      - name: Check shell syntax
+        run: |
+          for script in cluster/*.sh cluster/*.sbatch; do
+            zsh -n "$script"
+          done
+      - name: Run synthetic tests and mocked Slurm commands
+        run: python -m pytest -q

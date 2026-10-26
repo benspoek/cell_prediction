@@ -333,6 +333,34 @@ module.main(args,Accelerator(project_dir=args.dir,cpu=request["cpu"]))
                     "vendor_log": str(log_path), "vendor_arguments": arguments}
 
 
+def _embedding_context(name: str, config: dict, root: Path, path: Path, device: str) -> dict:
+    """Bind cached output to the exact input, implementation and local resources."""
+    keys = {"genept": ("vectors_path", "orthologs_path"),
+            "uce": ("checkpoint",),
+            "nicheformer": ("technology_mean_path", "gene_mapping_path")}
+    if name not in keys:
+        raise ValueError(f"Unknown embedding {name!r}")
+    files = [_resource(root, config[key]) for key in keys[name]]
+    if name == "nicheformer":
+        checkpoint = _resource(root, config["checkpoint_dir"], directory=True)
+        files.extend(_resource(checkpoint, value) for value in
+                     ("config.json", "model.safetensors", "model.h5ad", "vocab.json",
+                      "configuration_nicheformer.py", "modeling_nicheformer.py"))
+    elif name == "uce":
+        repo = _resource(root, config["repo_dir"], directory=True)
+        files.extend(sorted(repo.rglob("*.py")))
+        resources = _resource(root, config["resources_dir"], directory=True)
+        files.extend(_resource(resources, value) for value in
+                     ("species_chrom.csv", "species_offsets.pkl", "all_tokens.torch"))
+        files.extend(sorted((resources / "protein_embeddings").glob("*.pt")))
+    return {"schema_version": 1, "embedding": name, "config": config,
+            "prepared_sha256": file_sha256(path), "implementation_sha256": file_sha256(Path(__file__)),
+            "device": str(device), "python": sys.version,
+            "packages": {package: _version(package) for package in
+                         ("numpy", "pandas", "scipy", "anndata", "torch", "transformers", "accelerate")},
+            "resources": {str(item): file_sha256(item) for item in sorted(set(files))}}
+
+
 def generate_embedding(name: str, config: dict, prepared_h5ad_path: str | Path, output_dir: str | Path,
                        *, device: str, offline: bool = True, root: Path = Path(".")) -> EmbeddingResult:
     root = Path(root).resolve()
@@ -341,6 +369,27 @@ def generate_embedding(name: str, config: dict, prepared_h5ad_path: str | Path, 
     _offline_environment(root / "cache", offline)
     started = time.perf_counter()
     data = _load_prepared(path)
+    context = _embedding_context(name, config, root, path, device)
+    context_hash = hashlib.sha256(json.dumps(context, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    dimensions = {"genept": 3072, "uce": 1280, "nicheformer": 512}[name]
+    output = output_dir / f"{name}.npz"
+    audit_path = output_dir / f"{name}.audit.json"
+    if output.exists() or audit_path.exists():
+        if not (output.is_file() and audit_path.is_file()):
+            raise ValueError(f"Incomplete frozen {name} embedding; inspect/archive both output and audit before regenerating")
+        audit = json.loads(audit_path.read_text(encoding="utf-8"))
+        if audit.get("context_sha256") != context_hash:
+            raise ValueError(f"Frozen {name} embedding context changed; use a separate output directory or archive it explicitly")
+        if audit.get("output_sha256") != file_sha256(output):
+            raise ValueError(f"Frozen {name} embedding checksum changed")
+        with np.load(output, allow_pickle=False) as archive:
+            values, ids = archive["values"], archive["cell_ids"]
+            expected_ids = np.asarray(data.obs_names, dtype=str)
+            if (values.shape != (data.n_obs, dimensions) or not np.isfinite(values).all() or
+                    not np.array_equal(ids, expected_ids) or len(np.unique(ids)) != len(ids) or
+                    audit.get("dimensions") != dimensions or audit.get("rows") != data.n_obs):
+                raise ValueError(f"Frozen {name} embedding dimensions or cell IDs do not match its prepared input")
+        return EmbeddingResult(output, audit)
     if name == "genept":
         values, audit = _genept(data, config, root)
     elif name == "nicheformer":
@@ -349,8 +398,11 @@ def generate_embedding(name: str, config: dict, prepared_h5ad_path: str | Path, 
         values, audit = _uce(data, config, root, device, offline, output_dir / "uce_work")
     else:
         raise ValueError(f"Unknown embedding {name!r}")
+    if np.asarray(values).shape != (data.n_obs, dimensions):
+        raise ValueError(f"Expected native {name} output shape {(data.n_obs, dimensions)}")
     audit.update(embedding=name, prepared_sha256=file_sha256(path), device=str(device), offline=offline,
-                 elapsed_seconds=time.perf_counter() - started, numpy_version=_version("numpy"))
+                 elapsed_seconds=time.perf_counter() - started, numpy_version=_version("numpy"),
+                 context=context, context_sha256=context_hash)
     return _save(name, values, data.obs_names, output_dir, audit)
 
 

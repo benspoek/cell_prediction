@@ -15,7 +15,7 @@ FIELDS = ("protocol", "representation", "predictor", "fold")
 def create_jobs(config: dict, root: Path, stage: str, output: Path) -> list[dict]:
     if stage == "simple":
         representations, predictors = ["pca128", "ion_channels", "authors25"], ["tabpfn"]
-    elif stage == "full":
+    elif stage in {"full", "pending"}:
         representations = config["evaluation"]["representations"]
         predictors = [p for p in config["evaluation"]["predictors"] if p in {"tabpfn", "limix", "kumo"}]
     elif stage == "baselines":
@@ -33,6 +33,10 @@ def create_jobs(config: dict, root: Path, stage: str, output: Path) -> list[dict
         split = json.loads(split_file.read_text(encoding="utf-8"))
         for representation in representations:
             for predictor in predictors:
+                if stage == "pending" and predictor == "tabpfn" and representation in {
+                    "pca128", "ion_channels", "authors25"
+                }:
+                    continue
                 for fold in range(len(split["folds"])):
                     jobs.append(dict(zip(FIELDS, (protocol, representation, predictor, fold))))
     output.parent.mkdir(parents=True, exist_ok=True)

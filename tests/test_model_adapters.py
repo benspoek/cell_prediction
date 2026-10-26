@@ -14,7 +14,8 @@ import pytest
 from scipy import sparse
 
 from cell_property_prediction.embeddings import (
-    _genept, _nicheformer, _safe_extract_tar, _save, build_nicheformer_gene_mapping, load_genept_vectors,
+    _genept, _nicheformer, _safe_extract_tar, _save, build_nicheformer_gene_mapping, generate_embedding,
+    load_genept_vectors,
 )
 from cell_property_prediction.models import build_predictor
 
@@ -54,6 +55,35 @@ def test_genept_rejects_ada_vectors_and_preserves_cell_ids(tmp_path):
     with np.load(result.path, allow_pickle=False) as archive:
         assert archive["cell_ids"].tolist() == ["cell-b", "cell-a"]
         assert archive["values"].dtype == np.float32
+
+
+def test_embedding_resume_verifies_context_native_dimensions_and_cell_ids(tmp_path, monkeypatch):
+    from cell_property_prediction import embeddings
+
+    for name in ("input.h5ad", "vectors.npz", "mapping.tsv"):
+        (tmp_path / name).write_bytes(b"synthetic")
+    config = {"vectors_path": "vectors.npz", "orthologs_path": "mapping.tsv"}
+    data = SimpleNamespace(n_obs=2, obs_names=pd.Index(["cell-b", "cell-a"]))
+    monkeypatch.setattr(embeddings, "_load_prepared", lambda path: data)
+    monkeypatch.setattr(embeddings, "_genept", lambda *args: (np.ones((2, 3072)), {}))
+    output_dir = tmp_path / "output"
+    result = generate_embedding("genept", config, "input.h5ad", output_dir, device="cpu", root=tmp_path)
+    frozen_output = result.path.read_bytes()
+    frozen_audit = (output_dir / "genept.audit.json").read_bytes()
+    monkeypatch.setattr(embeddings, "_genept", lambda *args: pytest.fail("must reuse without encoding"))
+    reused = generate_embedding("genept", config, "input.h5ad", output_dir, device="cpu", root=tmp_path)
+    assert reused.audit == result.audit
+    assert result.path.read_bytes() == frozen_output
+    assert (output_dir / "genept.audit.json").read_bytes() == frozen_audit
+    data.obs_names = pd.Index(["cell-a", "cell-b"])
+    with pytest.raises(ValueError, match="dimensions or cell IDs"):
+        generate_embedding("genept", config, "input.h5ad", output_dir, device="cpu", root=tmp_path)
+    data.obs_names = pd.Index(["cell-b", "cell-a"])
+    (tmp_path / "vectors.npz").write_bytes(b"changed")
+    with pytest.raises(ValueError, match="context changed"):
+        generate_embedding("genept", config, "input.h5ad", output_dir, device="cpu", root=tmp_path)
+    assert result.path.read_bytes() == frozen_output
+    assert (output_dir / "genept.audit.json").read_bytes() == frozen_audit
 
 
 def test_unsafe_uce_archive_cannot_write_outside_destination(tmp_path):

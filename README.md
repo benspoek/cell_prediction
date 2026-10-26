@@ -4,16 +4,21 @@ For clone/pull, environment setup and the first three TabPFN experiments, follow
 the [cluster quickstart](docs/cluster-quickstart.md). The committed entry point is
 `zsh cluster/start.sh` with `setup`, `pilot`, `submit` and `report` stages.
 
+After completing those three benchmarks, follow the
+[pending-experiment guide](docs/pending-experiments.md) to run the remaining
+15 input/model combinations with `zsh cluster/pending.sh`. It preserves the
+completed folds and submits a separate 300-task continuation array.
+
 Reproduzierbarer Benchmark für die Vorhersage von 17 elektrophysiologischen
 Zelleigenschaften aus Einzelzell-Genexpression. Ausgangspunkt ist Scala et al.,
 *Phenotypic variation of transcriptomic cell types in mouse motor cortex*
 ([Paper](https://doi.org/10.1038/s41586-020-2907-3),
 [Autorencode und Daten](https://github.com/berenslab/mini-atlas)).
 
-Die Pipeline ist implementiert und mit synthetischen Daten geprüft. Die echten
-Daten, Encoder und Prädiktoren wurden noch nicht ausgeführt; es liegen noch keine
-Benchmark-Ergebnisse vor. Datenaufbereitung und Modellläufe erfolgen auf dem
-Cluster. Die lokalen Tests laden keine Datensätze oder Modellgewichte herunter.
+Die Pipeline ist implementiert und mit synthetischen Daten geprüft.
+Datenaufbereitung und Modellläufe erfolgen auf dem Cluster; wissenschaftliche
+Ergebnisse werden dort erzeugt und nicht in Git gespeichert. Die lokalen Tests
+laden keine Datensätze oder Modellgewichte herunter.
 
 ## Benchmark
 
@@ -166,8 +171,11 @@ zsh cluster/run.sh budget --jobs jobs/full.tsv
 
 `simple` erzeugt 60 Jobs bzw. 1.020 Target/Fold-Kombinationen. `full` erzeugt
 360 Jobs bzw. 6.120 Kombinationen und enthält die einfachen Benchmarks bereits.
-Deshalb `simple` als Einstieg und danach die restliche volle Matrix ausführen;
-fertige Ergebnisse werden wiederverwendet. Die Budgetschätzung ist konservativ
+Für die Fortsetzung eines abgeschlossenen `simple`-Laufs den
+[Pending-Workflow](docs/pending-experiments.md) verwenden: `pending` erzeugt nur
+die übrigen 300 Jobs bzw. 5.100 Fits. Seine separaten Piloten und Budgetprüfung
+verhindern, dass alte Pilotmessungen nach neuen Downloads weiterverwendet werden.
+`full` ist die vollständige 360-Job-Matrix, insbesondere für frische Läufe. Die Budgetschätzung ist konservativ
 (Pilotzeit × Targetanzahl × Faktor 2), ersetzt aber keine Messung der ganzen
 Laufzeit und des GPU-Speichers.
 
