@@ -30,28 +30,28 @@ def test_pending_matrix_is_full_matrix_without_simple_jobs(tmp_path, pending_con
                                               (pending, full, simple))
 
     assert len(simple) == 60
-    assert len(full) == 480
-    assert len(pending) == len(pending_keys) == 420
+    assert len(full) == 660
+    assert len(pending) == len(pending_keys) == 600
     assert pending_keys == full_keys - simple_keys
     assert not pending_keys & simple_keys
     pairs = {(job["representation"], job["predictor"]) for job in pending}
-    assert len(pairs) == 21
-    assert len({(job["representation"], job["predictor"]) for job in full}) == 24
+    assert len(pairs) == 30
+    assert len({(job["representation"], job["predictor"]) for job in full}) == 33
     for predictor in ("tabpfn", "limix", "kumo"):
         assert {(name, predictor) for name in ("hvg", "hvg_pca128")} <= pairs
-    assert len({name for name, predictor in pairs if predictor == "limix"}) == 8
-    assert len({name for name, predictor in pairs if predictor == "kumo"}) == 8
+    assert len({name for name, predictor in pairs if predictor == "limix"}) == 11
+    assert len({name for name, predictor in pairs if predictor == "kumo"}) == 11
     assert {job["predictor"] for job in pending} == {"tabpfn", "limix", "kumo"}
     assert {job["representation"] for job in pending if job["predictor"] == "tabpfn"} == {
-        "genept", "uce", "nicheformer", "hvg", "hvg_pca128"
+        "genept", "uce", "nicheformer", "hvg", "hvg_pca128", "hvg_genept", "hvg_uce", "hvg_nicheformer"
     }
     assert json.loads((tmp_path / "pending.json").read_text()) == {
-        "stage": "pending", "jobs": 420, "targets_per_job": 17, "target_fits": 7140,
+        "stage": "pending", "jobs": 600, "targets_per_job": 17, "target_fits": 10200,
         "fields": ["protocol", "representation", "predictor", "fold"],
     }
     assert parser().parse_args(["jobs", "--stage", "pending", "--output", "pending.tsv"]).stage == "pending"
     assert parser().parse_args(["pilot", "--predictors", "tabpfn"]).representations == [
-        "pca128", "ion_channels", "authors25", "genept", "uce", "nicheformer", "hvg", "hvg_pca128"
+        "pca128", "ion_channels", "authors25", "genept", "uce", "nicheformer", "hvg", "hvg_pca128", "hvg_genept", "hvg_uce", "hvg_nicheformer"
     ]
 
 
@@ -65,10 +65,10 @@ def test_pending_budget_requires_only_remaining_pairs(tmp_path, pending_config):
     atomic_json(pilot_path, pilot)
     pending_config["cluster"]["remaining_gpu_hours"] = 30
     estimate = estimate_jobs(pending_config, jobs, pilot_path, root=tmp_path)
-    assert estimate["jobs"] == 420
-    assert estimate["estimated_gpu_hours_with_2x_margin"] == pytest.approx(420 * 2 * 10 * 17 / 2 / 3600)
+    assert estimate["jobs"] == 600
+    assert estimate["estimated_gpu_hours_with_2x_margin"] == pytest.approx(600 * 2 * 10 * 17 / 2 / 3600)
     assert estimate["within_budget"]
-    pending_config["cluster"]["remaining_gpu_hours"] = 15
+    pending_config["cluster"]["remaining_gpu_hours"] = 20
     assert not estimate_jobs(pending_config, jobs, pilot_path, root=tmp_path)["within_budget"]
 
     pilot["runs"] = [row for row in runs if row["representation"] not in {"hvg", "hvg_pca128"}]
@@ -87,5 +87,5 @@ def test_combined_matrix_deduplicates_already_configured_hvg_inputs(tmp_path, pe
     pending_config["evaluation"]["representations"].extend(["hvg", "hvg_pca128", "hvg"])
     jobs = create_jobs(pending_config, tmp_path, stage, tmp_path / "jobs.tsv")
     keys = list(map(job_key, jobs))
-    assert len(keys) == len(set(keys)) == (480 if stage == "full" else 420)
+    assert len(keys) == len(set(keys)) == (660 if stage == "full" else 600)
     assert pending_config["evaluation"]["representations"][-3:] == ["hvg", "hvg_pca128", "hvg"]

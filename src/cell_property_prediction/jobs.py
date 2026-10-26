@@ -10,6 +10,7 @@ from pathlib import Path
 from .config import atomic_json, compute_config, file_sha256, resolve
 
 FIELDS = ("protocol", "representation", "predictor", "fold")
+HVG_EMBEDDINGS = ("hvg_genept", "hvg_uce", "hvg_nicheformer")
 
 
 def create_jobs(config: dict, root: Path, stage: str, output: Path) -> list[dict]:
@@ -19,10 +20,12 @@ def create_jobs(config: dict, root: Path, stage: str, output: Path) -> list[dict
         # An additive stage keeps the original configuration/result provenance
         # intact while evaluating both new inputs with every foundation model.
         representations, predictors = ["hvg", "hvg_pca128"], ["tabpfn", "limix", "kumo"]
+    elif stage == "hvg_embeddings":
+        representations, predictors = list(HVG_EMBEDDINGS), ["tabpfn", "limix", "kumo"]
     elif stage in {"full", "pending"}:
         # Include the two HVG inputs without changing the frozen base config.
         representations = list(dict.fromkeys([*config["evaluation"]["representations"],
-                                               "hvg", "hvg_pca128"]))
+                                               "hvg", "hvg_pca128", *HVG_EMBEDDINGS]))
         predictors = [p for p in config["evaluation"]["predictors"] if p in {"tabpfn", "limix", "kumo"}]
     elif stage == "baselines":
         representations = config["evaluation"]["representations"]
@@ -81,6 +84,14 @@ def compute_fingerprint(config: dict, root: Path) -> str:
     embeddings = resolve(root, config["paths"]["embeddings_dir"])
     paths.extend(embeddings.glob("*.npz"))
     paths.extend(embeddings.glob("*.audit.json"))
+    # Hash only declared reusable artifacts. UCE work directories and temporary
+    # encoder intermediates are mutable and are not predictor inputs.
+    hvg = embeddings / "hvg"
+    paths.extend(hvg.glob("*/*/selection.json"))
+    paths.extend(hvg.glob("*/*/counts.h5ad"))
+    for encoder in ("genept", "uce", "nicheformer"):
+        paths.extend(hvg.glob(f"*/*/{encoder}.npz"))
+        paths.extend(hvg.glob(f"*/*/{encoder}.audit.json"))
     files = {str(path.resolve()): file_sha256(path) for path in paths if path.is_file()}
     return hashlib.sha256(json.dumps({"config": context, "files": files}, sort_keys=True).encode()).hexdigest()
 

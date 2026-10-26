@@ -11,11 +11,12 @@ saved ten-fold `cell_kfold` and `mouse_group_kfold` splits.
 
 There are 2 inputs × 3 predictors × 2 protocols × 10 folds = **120 array tasks**,
 with 17 target fits each (**2,040 fits**). Both inputs are now included in the
-combined `pending` stage (420 tasks) and `full` stage (480 tasks). Use the
+combined `pending` stage (600 tasks) and `full` stage (660 tasks). Use the
 [pending-experiment guide](pending-experiments.md) to run all remaining inputs
-and HVG together in one production submission. This standalone workflow is for
+and HVG together in one production submission, including HVG-derived encoder
+embeddings; see the [unified guide](hvg-embedding-experiments.md). This standalone workflow is for
 running only the HVG subset; do not submit it alongside the combined pending
-array. All eight inputs across three models produce 48 protocol/input/model
+array. All eleven inputs across three models produce 66 protocol/input/model
 summary rows once the complete comparison finishes.
 
 ## Selection rule and interpretation

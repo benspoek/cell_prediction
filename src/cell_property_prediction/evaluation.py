@@ -21,6 +21,7 @@ from .hvg import HVG_REPRESENTATIONS
 
 FORMAT_VERSION = 1
 BASELINE_REPRESENTATIONS = {"pca128", "ion_channels", "authors25"}
+HVG_EMBEDDING_REPRESENTATIONS = {"hvg_genept", "hvg_uce", "hvg_nicheformer"}
 
 
 def _canonical_hash(value: Any) -> str:
@@ -95,7 +96,13 @@ def _read_ion_genes(path: Path, gene_names: np.ndarray) -> tuple[set[str], dict]
 
 
 def _features(config: dict, root: Path, representation: str, train_ids: list[str],
-              test_ids: list[str]) -> tuple[np.ndarray, np.ndarray, dict, dict[str, str]]:
+              test_ids: list[str], *, protocol: str | None = None,
+              fold: int | None = None) -> tuple[np.ndarray, np.ndarray, dict, dict[str, str]]:
+    if representation in HVG_EMBEDDING_REPRESENTATIONS:
+        if protocol is None or fold is None:
+            raise ValueError("HVG encoder features require an outer protocol and fold")
+        from .hvg_embeddings import load_hvg_features
+        return load_hvg_features(config, root, representation, protocol, fold, train_ids, test_ids)
     prepared = _path(config, root, "prepared_dir", "data/processed")
     if representation in HVG_REPRESENTATIONS:
         from .hvg import build_features
@@ -238,6 +245,8 @@ def evaluate_fold(config: dict, *, root: Path, protocol: str, representation: st
     root = Path(root).resolve()
     if predictor == "sparse_rrr":
         raise ValueError("Use the separate historical RRR runner for the legacy replication")
+    if predictor == "ridge" and representation in HVG_EMBEDDING_REPRESENTATIONS:
+        raise ValueError("Ridge on HVG encoder features requires separate inner-fold selection and encoding")
     prepared = _path(config, root, "prepared_dir", "data/processed")
     split_path = _path(config, root, "splits_dir", "data/splits") / f"{protocol}.json"
     split_manifest = json.loads(split_path.read_text(encoding="utf-8"))
@@ -267,7 +276,9 @@ def evaluate_fold(config: dict, *, root: Path, protocol: str, representation: st
         if set(metadata.loc[train_ids, mouse]) & set(metadata.loc[test_ids, mouse]):
             raise ValueError("Mouse-held-out split leaks a mouse between training and test")
     started = time.time()
-    train, query, feature_audit, inputs = _features(config, root, representation, train_ids, test_ids)
+    feature_context = {"protocol": protocol, "fold": fold} if representation in HVG_EMBEDDING_REPRESENTATIONS else {}
+    train, query, feature_audit, inputs = _features(config, root, representation, train_ids, test_ids,
+                                                  **feature_context)
     inputs.update({str(targets_path): file_sha256(targets_path), str(metadata_path): file_sha256(metadata_path),
                    str(split_path): file_sha256(split_path)})
     model_cfg = config.get("models", {}).get(predictor, {})
@@ -278,6 +289,10 @@ def evaluate_fold(config: dict, *, root: Path, protocol: str, representation: st
                    if path.is_file()}
     if representation in HVG_REPRESENTATIONS:
         for name in ("hvg.py", "rrr.py"):
+            path = Path(__file__).with_name(name)
+            code_inputs[str(path)] = file_sha256(path)
+    if representation in HVG_EMBEDDING_REPRESENTATIONS:
+        for name in ("hvg_embeddings.py", "hvg.py", "rrr.py", "embeddings.py"):
             path = Path(__file__).with_name(name)
             code_inputs[str(path)] = file_sha256(path)
     fingerprint = _canonical_hash({"format_version": FORMAT_VERSION, "config": compute_config(config),

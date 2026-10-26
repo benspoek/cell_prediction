@@ -3,7 +3,8 @@
 set -euo pipefail
 ROOT=${CPP_ROOT:?Set CPP_ROOT to the existing project directory on the cluster}
 PROFILE=pending
-if [[ "${1:-}" == --hvg ]]; then PROFILE=hvg; shift; fi
+if [[ "${1:-}" == --hvg ]]; then PROFILE=hvg; shift
+elif [[ "${1:-}" == --hvg-embeddings ]]; then PROFILE=hvg_embeddings; shift; fi
 ACTION=${1:-help}
 if (( $# )); then shift; fi
 cd "$ROOT"
@@ -19,6 +20,7 @@ IDS="$STATE/slurm-jobs.tsv"
 PILOT="$STATE/pilot/timings.json"
 JOBS="jobs/$PROFILE.tsv"
 LAUNCHER="cluster/$PROFILE.sh"
+HVG_ENCODERS=(genept uce nicheformer)
 if [[ "$PROFILE" == hvg ]]; then
     EXPECTED_TASKS=120
     ENCODERS=()
@@ -26,22 +28,32 @@ if [[ "$PROFILE" == hvg ]]; then
     OTHER_INPUTS=(hvg hvg_pca128)
     FETCH_MODELS=(limix kumo)
     BOOTSTRAP_MODELS=(limix kumo)
+elif [[ "$PROFILE" == hvg_embeddings ]]; then
+    EXPECTED_TASKS=180
+    ENCODERS=()
+    TABPFN_INPUTS=(hvg_genept hvg_uce hvg_nicheformer)
+    OTHER_INPUTS=(hvg_genept hvg_uce hvg_nicheformer)
+    FETCH_MODELS=(limix kumo genept uce nicheformer)
+    BOOTSTRAP_MODELS=(limix kumo uce nicheformer)
 else
-    EXPECTED_TASKS=420
-    # Keep timings from the old 15-pair continuation unchanged.
-    PILOT="$STATE/pilot_with_hvg/timings.json"
+    EXPECTED_TASKS=600
+    # Preserve both historical timing sets; measure all 30 remaining pairs anew.
+    PILOT="$STATE/pilot_with_hvg_encoders/timings.json"
     ENCODERS=(genept uce nicheformer)
-    TABPFN_INPUTS=(genept uce nicheformer hvg hvg_pca128)
-    OTHER_INPUTS=(pca128 ion_channels authors25 genept uce nicheformer hvg hvg_pca128)
+    TABPFN_INPUTS=(genept uce nicheformer hvg hvg_pca128 hvg_genept hvg_uce hvg_nicheformer)
+    OTHER_INPUTS=(pca128 ion_channels authors25 genept uce nicheformer hvg hvg_pca128 hvg_genept hvg_uce hvg_nicheformer)
     FETCH_MODELS=(limix kumo genept uce nicheformer)
     BOOTSTRAP_MODELS=(limix kumo uce nicheformer)
 fi
+
+PILOT_TARGET_ARGS=(--targets 17)
+if [[ "$PROFILE" == hvg ]]; then PILOT_TARGET_ARGS=(); fi
 
 usage() {
     if [[ "$PROFILE" == hvg ]]; then
         printf 'Usage: zsh cluster/hvg.sh {setup|pilots|submit [--execute]|report|status}\n'
     else
-        printf 'Usage: zsh cluster/pending.sh {setup|embeddings|pilots|submit [--execute]|report|status}\n'
+        printf 'Usage: zsh %s {setup|embeddings|panels|encoder-pilot|encoders|pilot|pilots|submit [--execute]|report|status}\n' "$LAUNCHER"
     fi
 }
 
@@ -131,14 +143,15 @@ print("\n".join(sorted(seen)))
 ' "$1")
 }
 
-ALL_STAGES=(genept uce nicheformer pilot_tabpfn pilot_limix pilot_kumo production report)
+ALL_STAGES=(genept uce nicheformer panels hvg_pilot_genept hvg_pilot_uce hvg_pilot_nicheformer hvg_encoder_genept hvg_encoder_uce hvg_encoder_nicheformer pilot_tabpfn pilot_limix pilot_kumo production report)
 DOWNSTREAM_STAGES=(pilot_tabpfn pilot_limix pilot_kumo production report)
+HVG_STAGES=(panels hvg_pilot_genept hvg_pilot_uce hvg_pilot_nicheformer hvg_encoder_genept hvg_encoder_uce hvg_encoder_nicheformer)
 
 # Downloads and encoder outputs change the common pilot fingerprint. Keep the
 # two workflows serial when they share this checkout and these model resources.
 guard_other_workflow() {
     local other own_ids="$IDS"
-    for other in results/pending_workflow/slurm-jobs.tsv results/hvg_workflow/slurm-jobs.tsv; do
+    for other in results/pending_workflow/slurm-jobs.tsv results/hvg_workflow/slurm-jobs.tsv results/hvg_embeddings_workflow/slurm-jobs.tsv; do
         if [[ "$other" != "$own_ids" && -f "$other" ]]; then
             local IDS="$other"
             guard_active "${ALL_STAGES[@]}"
@@ -146,15 +159,85 @@ guard_other_workflow() {
     done
 }
 
+# Reuse completed artifacts; only active unfinished jobs may become dependencies.
+full_dependencies() {
+    ENCODER_IDS=()
+    for encoder in "${ENCODERS[@]}"; do
+        last_job "$encoder"
+        # Completed artifacts can outlive Slurm's controller records. Only
+        # add dependencies for unfinished encoders whose jobs remain active.
+        if preserved --embedding "$encoder" > "$STATE/$encoder-readiness.log" 2>&1; then
+        continue
+        fi
+        if [[ -z "$LAST_ID" ]]; then
+        cat "$STATE/$encoder-readiness.log" >&2
+        echo "No valid $encoder embedding or saved encoder job. Run the embeddings stage first." >&2
+        exit 2
+        fi
+        queue_ids "$LAST_ID"
+        if ! printf '%s\n' "$ACTIVE_IDS" | "$PY" -c \
+        'import sys; raise SystemExit(0 if sys.argv[1] in sys.stdin.read().split() else 1)' "$LAST_ID"; then
+        cat "$STATE/$encoder-readiness.log" >&2
+        echo "$encoder job $LAST_ID is no longer active and its embedding is invalid. Inspect its log and retry embeddings." >&2
+        exit 2
+        fi
+        ENCODER_IDS+=("$LAST_ID")
+    done
+}
+
+artifact_dependency() {
+    local stage=$1 log=$2
+    shift 2
+    local valid=0
+    if zsh cluster/run.sh "$@" > "$log" 2>&1; then valid=1; fi
+    last_job "$stage"
+    if [[ -n "$LAST_ID" ]]; then
+        queue_ids "$LAST_ID"
+        # A final artifact may already validate while its writer still owns
+        # GPUs. Depend on every active upstream array to preserve the cap.
+        if [[ -n "$ACTIVE_IDS" ]]; then ENCODER_IDS+=("$LAST_ID"); return 0; fi
+    fi
+    if (( valid )); then return 0; fi
+    cat "$log" >&2
+    echo "No valid artifact or active $stage job. Inspect logs and rerun its stage." >&2
+    exit 2
+}
+
+validate_encoder_tasks() {
+    "$PY" - "$CPP_CONFIG" <<'PY'
+import json, pathlib, sys, yaml
+config = yaml.safe_load(pathlib.Path(sys.argv[1]).read_text())
+protocols = list(config["evaluation"]["protocols"])
+if protocols != ["cell_kfold", "mouse_group_kfold"] or int(config["evaluation"]["n_splits"]) != 10:
+    raise SystemExit("HVG encoding requires cell_kfold then mouse_group_kfold, ten folds each")
+directory = pathlib.Path(config["paths"]["splits_dir"])
+for protocol in protocols:
+    split = json.loads((directory / f"{protocol}.json").read_text())
+    if len(split["folds"]) != 10:
+        raise SystemExit("HVG encoding requires exactly twenty saved fold tasks")
+PY
+}
+
+submit_hvg_encoder() {
+    local encoder=$1 indices=$2 stage=$3
+    shift 3
+    if [[ "$encoder" == genept ]]; then
+        submit_job "$stage" --partition=c23mm --gres=none --cpus-per-task=8 --mem=32G \
+            "--array=$indices%4" "$@" cluster/hvg_encoder_array.sbatch "$encoder"
+    else
+        submit_job "$stage" "--array=$indices%2" "$@" cluster/hvg_encoder_array.sbatch "$encoder"
+    fi
+}
+
 case "$ACTION" in
     help|-h|--help) usage; exit 0;;
-    setup|embeddings|pilots|report|status)
+    setup|embeddings|panels|encoder-pilot|encoders|pilot|pilots|report|status)
         (( $# == 0 )) || { usage >&2; exit 2; };;
     submit)
         (( $# == 0 )) || [[ $# == 1 && "$1" == --execute ]] || { usage >&2; exit 2; };;
     *) echo "Unknown action: $ACTION" >&2; usage >&2; exit 2;;
 esac
-if [[ "$PROFILE" == hvg && "$ACTION" == embeddings ]]; then
+if [[ "$PROFILE" == hvg && "$ACTION" == (embeddings|panels|encoder-pilot|encoders) ]]; then
     echo 'HVG inputs are fitted inside each evaluation fold; no embedding jobs are needed.' >&2
     usage >&2; exit 2
 fi
@@ -166,11 +249,16 @@ case "$ACTION" in
         # Check required interpreters before snapshot, downloads, or bootstrap.
         PY312=${CPP_PYTHON:-python3.12}
         PY311=${CPP_PYTHON_UCE:-python3.11}
-        INTERPRETERS=("${PY312}:3.12")
-        if [[ "$PROFILE" == pending ]]; then INTERPRETERS+=("${PY311}:3.11"); fi
-        if [[ "$PROFILE" == hvg && -x "$ROOT/.venvs/limix/bin/python" && -x "$ROOT/.venvs/kumo/bin/python" ]]; then
-            INTERPRETERS=()
-        fi
+        INTERPRETERS=()
+        NEED312=0
+        NEED311=0
+        for environment in "${BOOTSTRAP_MODELS[@]}"; do
+            if [[ ! -x "$ROOT/.venvs/$environment/bin/python" ]]; then
+                if [[ "$environment" == uce ]]; then NEED311=1; else NEED312=1; fi
+            fi
+        done
+        if (( NEED312 )); then INTERPRETERS+=("${PY312}:3.12"); fi
+        if (( NEED311 )); then INTERPRETERS+=("${PY311}:3.11"); fi
         for item in "${INTERPRETERS[@]}"; do
             executable=${item%:*}
             version=${item##*:}
@@ -186,14 +274,16 @@ case "$ACTION" in
         # Existing data, TabPFN, core, and tabpfn environments are never rebuilt.
         zsh cluster/run.sh prefetch --models "${FETCH_MODELS[@]}"
         for environment in "${BOOTSTRAP_MODELS[@]}"; do
-            if [[ "$PROFILE" == hvg && -x "$ROOT/.venvs/$environment/bin/python" ]]; then continue; fi
+            if [[ -x "$ROOT/.venvs/$environment/bin/python" ]]; then continue; fi
             zsh cluster/bootstrap.sh "$environment"
         done
         preserved
         if [[ "$PROFILE" == hvg ]]; then
             printf 'HVG setup complete. Next: zsh cluster/hvg.sh pilots\n'
-        else
+        elif [[ "$PROFILE" == pending ]]; then
             printf 'Continuation setup complete. Next: zsh cluster/pending.sh embeddings\n'
+        else
+            printf 'HVG encoder setup complete. Next: zsh cluster/hvg_embeddings.sh panels\n'
         fi
         ;;
     embeddings)
@@ -205,12 +295,78 @@ case "$ACTION" in
                 echo "Missing $environment environment. Run pending.sh setup first." >&2; exit 2;
             }
         done
-        submit_job genept cluster/stage.sbatch embed --encoder genept --device cpu
-        submit_job uce cluster/encoder.sbatch uce
-        submit_job nicheformer cluster/encoder.sbatch nicheformer
-        printf 'Encoder IDs saved in %s. Next: zsh cluster/pending.sh pilots\n' "$IDS"
+        for encoder in "${ENCODERS[@]}"; do
+            if preserved --embedding "$encoder" > "$STATE/$encoder-readiness.log" 2>&1; then continue; fi
+            if [[ "$encoder" == genept ]]; then
+                submit_job genept cluster/stage.sbatch embed --encoder genept --device cpu
+            else
+                submit_job "$encoder" cluster/encoder.sbatch "$encoder"
+            fi
+        done
+        printf 'Encoder IDs saved in %s. Next: zsh cluster/pending.sh panels\n' "$IDS"
         ;;
-    pilots)
+    panels)
+        guard_other_workflow
+        guard_active "${HVG_STAGES[@]}" "${DOWNSTREAM_STAGES[@]}"
+        preserved
+        if zsh cluster/run.sh hvg-panels --check > "$STATE/panels-readiness.log" 2>&1; then
+            echo 'All native HVG panels already validate.'
+        else
+            submit_job panels cluster/stage.sbatch hvg-panels
+        fi
+        ;;
+    encoder-pilot)
+        guard_other_workflow
+        guard_active hvg_pilot_genept hvg_pilot_uce hvg_pilot_nicheformer hvg_encoder_genept hvg_encoder_uce hvg_encoder_nicheformer "${DOWNSTREAM_STAGES[@]}"
+        preserved
+        validate_encoder_tasks
+        full_dependencies
+        artifact_dependency panels "$STATE/panels-readiness.log" hvg-panels --check
+        DEPENDENCY=()
+        if (( ${#ENCODER_IDS} )); then DEPENDENCY=("--dependency=afterok:${(j.:.)ENCODER_IDS}"); fi
+        for encoder in "${HVG_ENCODERS[@]}"; do
+            if zsh cluster/run.sh hvg-embedding-check --encoder "$encoder" --first-only > "$STATE/$encoder-first-readiness.log" 2>&1; then continue; fi
+            submit_hvg_encoder "$encoder" 0 "hvg_pilot_$encoder" "${DEPENDENCY[@]}"
+        done
+        echo 'After all three first-fold encoders finish, update remaining_gpu_hours and run encoders.'
+        ;;
+    encoders)
+        guard_other_workflow
+        guard_active "${ALL_STAGES[@]}"
+        preserved
+        validate_encoder_tasks
+        zsh cluster/run.sh hvg-panels --check
+        zsh cluster/run.sh hvg-embedding-check --first-only
+        BUDGET="$STATE/encoder-budget.json"
+        # A failed budget command must never leave an approved decision for use.
+        zsh cluster/run.sh hvg-encoder-budget --require-within-budget > "$BUDGET"
+        cat "$BUDGET"
+        for encoder in "${HVG_ENCODERS[@]}"; do
+            INDICES=$("$PY" - "$BUDGET" "$encoder" <<'PY'
+import json, sys
+decision = json.load(open(sys.argv[1]))
+if decision.get("approved") is not True or decision.get("within_budget") is not True:
+    raise SystemExit("HVG encoder budget has not been approved")
+protocols = {"cell_kfold": 0, "mouse_group_kfold": 10}
+indices = []
+for row in decision["remaining_jobs"]:
+    if row["encoder"] != sys.argv[2]:
+        continue
+    fold = int(row["fold"])
+    if row["protocol"] not in protocols or not 0 <= fold < 10:
+        raise SystemExit("Invalid remaining HVG encoder task")
+    index = protocols[row["protocol"]] + fold
+    if index == 0:
+        raise SystemExit("The completed pilot cannot appear in the remaining tasks")
+    indices.append(index)
+print(",".join(map(str, sorted(set(indices)))))
+PY
+)
+            if [[ -z "$INDICES" ]]; then continue; fi
+            submit_hvg_encoder "$encoder" "$INDICES" "hvg_encoder_$encoder"
+        done
+        ;;
+    pilot|pilots)
         guard_other_workflow
         guard_active "${DOWNSTREAM_STAGES[@]}"
         preserved
@@ -219,39 +375,23 @@ case "$ACTION" in
                 echo "Missing $environment environment. Run zsh $LAUNCHER setup first." >&2; exit 2;
             }
         done
-        ENCODER_IDS=()
-        for encoder in "${ENCODERS[@]}"; do
-            last_job "$encoder"
-            # Completed artifacts can outlive Slurm's controller records. Only
-            # add dependencies for unfinished encoders whose jobs remain active.
-            if preserved --embedding "$encoder" > "$STATE/$encoder-readiness.log" 2>&1; then
-                continue
-            fi
-            if [[ -z "$LAST_ID" ]]; then
-                cat "$STATE/$encoder-readiness.log" >&2
-                echo "No valid $encoder embedding or saved encoder job. Run the embeddings stage first." >&2
-                exit 2
-            fi
-            queue_ids "$LAST_ID"
-            if ! printf '%s\n' "$ACTIVE_IDS" | "$PY" -c \
-                'import sys; raise SystemExit(0 if sys.argv[1] in sys.stdin.read().split() else 1)' "$LAST_ID"; then
-                cat "$STATE/$encoder-readiness.log" >&2
-                echo "$encoder job $LAST_ID is no longer active and its embedding is invalid. Inspect its log and retry embeddings." >&2
-                exit 2
-            fi
-            ENCODER_IDS+=("$LAST_ID")
-        done
+        full_dependencies
+        if [[ "$PROFILE" != hvg ]]; then
+            for encoder in "${HVG_ENCODERS[@]}"; do
+                artifact_dependency "hvg_encoder_$encoder" "$STATE/$encoder-hvg-readiness.log" hvg-embedding-check --encoder "$encoder"
+            done
+        fi
         DEPENDENCY=()
         if (( ${#ENCODER_IDS} )); then
             DEPENDENCY=("--dependency=afterok:${(j.:.)ENCODER_IDS}")
         fi
         # Each job updates the same timing JSON, so serialize all three writers.
         submit_job pilot_tabpfn "${DEPENDENCY[@]}" cluster/pilot.sbatch tabpfn \
-            --representations "${TABPFN_INPUTS[@]}" --output "$PILOT"
+            --representations "${TABPFN_INPUTS[@]}" "${PILOT_TARGET_ARGS[@]}" --output "$PILOT"
         submit_job pilot_limix "--dependency=afterok:$LAST_JOB" cluster/pilot.sbatch limix \
-            --representations "${OTHER_INPUTS[@]}" --output "$PILOT"
+            --representations "${OTHER_INPUTS[@]}" "${PILOT_TARGET_ARGS[@]}" --output "$PILOT"
         submit_job pilot_kumo "--dependency=afterok:$LAST_JOB" cluster/pilot.sbatch kumo \
-            --representations "${OTHER_INPUTS[@]}" --output "$PILOT"
+            --representations "${OTHER_INPUTS[@]}" "${PILOT_TARGET_ARGS[@]}" --output "$PILOT"
         printf 'After all pilots succeed, update the actual remaining GPU-hour budget before submit --execute.\n'
         ;;
     submit)
@@ -261,6 +401,7 @@ case "$ACTION" in
         zsh cluster/run.sh jobs --stage "$PROFILE" --output "$JOBS"
         if (( $# )); then
             if [[ "$PROFILE" == pending ]]; then preserved --embeddings; fi
+            if [[ "$PROFILE" != hvg ]]; then zsh cluster/run.sh hvg-embedding-check; fi
             # submit.sh performs the current-quota check with these pilot timings
             # before sbatch. Retain its normal output for the existing workflow.
             OUTPUT=$(zsh cluster/submit.sh "$JOBS" --pilot "$PILOT" --execute) || {
@@ -300,6 +441,9 @@ for line in sys.stdin.read().splitlines():
         rows[fields[0]] = fields[1:3]
 expected = {f"{job_id}_{index}" for index in range(task_count)}
 bad = [task for task in sorted(expected) if rows.get(task) != ["COMPLETED", "0:0"]]
+observed = {task for task in rows if task.startswith(f"{job_id}_") and task[len(job_id)+1:].isdigit()}
+if observed != expected:
+    bad.extend(sorted(observed - expected))
 if bad:
     raise SystemExit(f"Production accounting does not confirm all {task_count} tasks completed with exit 0; missing/failed examples: {bad[:5]}. Inspect sacct and retry the array before report.")
 ' "$LAST_ID" "$EXPECTED_TASKS"

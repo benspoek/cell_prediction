@@ -97,6 +97,24 @@ im Training variierenden Gene, ohne diese HVG-Auswahl. Die HVG-Experimente nutze
 dieselben gespeicherten `cell_kfold`- und `mouse_group_kfold`-Splits wie die
 übrigen Hauptbenchmarks; sie verwenden nicht den separaten historischen Split.
 
+Die zusätzlichen Encoder-Eingaben `hvg_genept`, `hvg_uce` und
+`hvg_nicheformer` verwenden für jeden Fold dieselbe HVG-Liste wie die direkten
+HVG-Eingaben. Die Encoder erhalten ausschließlich die rohen Exon-plus-Intron-
+Counts dieser Gene und behalten ihre native Vorverarbeitung bei. GenePT
+normalisiert und mittelt damit auf dem ausgewählten Panel; UCE verwendet seine
+native countbasierte Stichprobe; Nicheformer seine festen Referenzmittel und
+Genrangfolge. Die Encoder bleiben eingefroren und behalten ihre nativen
+Dimensionen 3.072, 1.280 bzw. 512.
+
+Trainingszellen stehen beim Kodieren vor den Testzellen, um insbesondere bei UCE
+keine von vorherigen Testzellen abhängige Zufallsfolge im Training zu erzeugen.
+Gespeichert werden Embeddings in kanonischer Zell-ID-Reihenfolge. Die zwanzig
+HVG-Panels und sechzig Encoder-Ausgaben werden über alle drei Prädiktoren
+wiederverwendet. Jeder Fold wird gegen sein eigenes Auswahl- und Split-Audit
+geprüft; die gemeinsame Experimentdefinition muss über Folds übereinstimmen.
+Dies ist ein Vergleich nativer HVG-Panel-Pipelines, keine Ablation mit über alle
+Genpanels festgehaltener Normalisierung.
+
 GenePT verwendet log1p(CPM10k), mit Bibliotheksgröße aus allen Genen, feste
 eindeutige Maus-Mensch-Orthologe und die originalen 3.072-dimensionalen
 Genvektoren. Die gewichtete Summe wird durch die Anzahl berücksichtigter Gene

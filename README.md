@@ -6,9 +6,11 @@ the [cluster quickstart](docs/cluster-quickstart.md). The committed entry point 
 
 After completing those three benchmarks, follow the
 [pending-experiment guide](docs/pending-experiments.md) to run the remaining
-21 input/model combinations with `zsh cluster/pending.sh`, including HVG and
-HVG→PCA128 for all three models. It preserves the completed folds and submits
-one combined 420-task continuation array.
+30 input/model combinations with `zsh cluster/pending.sh`, including direct
+HVG, HVG→PCA128 and HVG→GenePT/UCE/Nicheformer for all three models. It preserves
+the completed folds and submits one combined 600-task production array. The
+[unified HVG-encoder guide](docs/hvg-embedding-experiments.md) describes feature
+preparation, encoder pilots and the full seventeen-target prediction pilot.
 
 The combined pending workflow already includes the authors' approximately
 1,000 highly variable genes and PCA128 of those genes. The
@@ -50,7 +52,10 @@ verglichen. Zwei zusätzliche Expressionsrepräsentationen, `hvg` und
 `hvg_pca128`, verwenden die Nullraten-/Expressionsregel der Autoren für etwa
 1.000 Gene; die zweite reduziert diese Gene anschließend auf maximal 128
 PCA-Komponenten. Genwahl, Skalierung und PCA werden in jedem Trainingsfold neu
-angepasst. Beide werden ebenfalls mit allen drei Foundation-Modellen geprüft.
+angepasst. Beide werden ebenfalls mit allen drei Foundation-Modellen geprüft. Zusätzlich
+werden dieselben trainingsfoldspezifischen HVG-Panels durch GenePT, UCE und
+Nicheformer kodiert (`hvg_genept`, `hvg_uce`, `hvg_nicheformer`). Alle elf
+Eingaben sind in der vollständigen Matrix enthalten.
 Ridge und ein Trainingsmittelwert bilden Kontrollmodelle. Eine
 zusätzliche Sparse-RRR-Baseline wählt 1.000 Gene und ihre Hyperparameter innerhalb
 der Trainingsfolds aus. Es findet kein Encoder-Finetuning statt.
@@ -129,7 +134,10 @@ elektrophysiologischen Labels, Maus- oder Zelltypinformationen.
 ## Embeddings und Pilot
 
 Für die drei einfachen Benchmarks sind noch keine Embeddings erforderlich.
-Für die vollständige Matrix diese drei Schritte vorher abschließen:
+Für die vollständige Matrix zuerst die drei vollständigen Expressions-Embeddings
+und anschließend die foldspezifischen HVG-Embeddings nach der
+[HVG-Encoder-Anleitung](docs/hvg-embedding-experiments.md) erzeugen. Die ersten
+drei Encoder-Aufrufe lauten:
 
 ```zsh
 CPP_ENV=core sbatch --export=ALL cluster/stage.sbatch \
@@ -179,28 +187,28 @@ zsh cluster/run.sh jobs --stage full --output jobs/full.tsv
 zsh cluster/run.sh jobs --stage baselines --output jobs/baselines.tsv
 zsh cluster/run.sh jobs --stage rrr --output jobs/rrr.tsv
 zsh cluster/run.sh jobs --stage hvg --output jobs/hvg.tsv
+zsh cluster/run.sh jobs --stage hvg_embeddings --output jobs/hvg_embeddings.tsv
 zsh cluster/run.sh budget --jobs jobs/full.tsv
 ```
 
 `simple` erzeugt 60 Jobs bzw. 1.020 Target/Fold-Kombinationen. `full` erzeugt
-480 Jobs bzw. 8.160 Kombinationen und enthält die einfachen Benchmarks bereits.
+660 Jobs bzw. 11.220 Kombinationen und enthält die einfachen Benchmarks bereits.
 Für die Fortsetzung eines abgeschlossenen `simple`-Laufs den
 [Pending-Workflow](docs/pending-experiments.md) verwenden: `pending` erzeugt nur
-die übrigen 420 Jobs bzw. 7.140 Fits einschließlich beider HVG-Eingaben. Seine separaten Piloten und Budgetprüfung
+die übrigen 600 Jobs bzw. 10.200 Fits einschließlich aller HVG-Eingaben. Seine separaten Piloten und Budgetprüfung
 verhindern, dass alte Pilotmessungen nach neuen Downloads weiterverwendet werden.
-`full` ist die vollständige 480-Job-Matrix, insbesondere für frische Läufe. Die Budgetschätzung ist konservativ
+`full` ist die vollständige 660-Job-Matrix, insbesondere für frische Läufe. Die Budgetschätzung ist konservativ
 (Pilotzeit × Targetanzahl × Faktor 2), ersetzt aber keine Messung der ganzen
 Laufzeit und des GPU-Speichers.
 
-`hvg` ist die optionale Teilmenge mit sechs HVG-Eingabe/Modell-Paaren,
-120 Jobs und 2.040 Target/Fold-Fits. Beide HVG-Eingaben sind bereits im
-`full`- und `pending`-Manifest enthalten; für den kombinierten Pending-Lauf
-ist keine weitere HVG-Einreichung nötig. Insgesamt ergeben acht Eingaben ×
-drei Modelle × zwei Protokolle × zehn Folds 480 Jobs. Die kombinierte
-Fortsetzung verwendet neue Piloten unter
-`results/pending_workflow/pilot_with_hvg/`; ältere Pilotmessungen werden
-beibehalten. Die Anleitung für den optionalen HVG-Teillauf steht im
-[HVG experiment guide](docs/hvg-experiments.md).
+`hvg` ist die optionale direkte HVG-Teilmenge (120 Jobs, 2.040 Fits).
+`hvg_embeddings` ist die Teilmenge aus HVG→GenePT, HVG→UCE und HVG→Nicheformer
+(180 Jobs, 3.060 Fits). Beide Teilmengen sind bereits in `full` und `pending`
+enthalten. Insgesamt ergeben elf Eingaben × drei Modelle × zwei Protokolle ×
+zehn Folds 660 Jobs. Die kombinierte Fortsetzung nutzt separate Encoder-Piloten
+und einen Prädiktor-Piloten mit allen 17 Targets pro Eingabe/Modell-Paar. Eine
+separate Einreichung der HVG-Teilmengen ist dafür nicht nötig. Siehe
+[unified HVG-encoder guide](docs/hvg-embedding-experiments.md).
 
 ```zsh
 # Standard: nur Kommando anzeigen.

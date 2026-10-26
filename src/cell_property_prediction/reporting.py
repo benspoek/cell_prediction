@@ -11,7 +11,8 @@ import pandas as pd
 from .config import atomic_json, compute_config, file_sha256
 from .author_metrics import authors_joint_scores
 from .data import LOG_TARGETS
-from .evaluation import _atomic_csv, _canonical_hash, _load_table, _mouse_column, _path
+from .evaluation import (HVG_EMBEDDING_REPRESENTATIONS, _atomic_csv, _canonical_hash,
+                         _load_table, _mouse_column, _path)
 
 KEYS = ["protocol", "representation", "predictor"]
 
@@ -70,6 +71,46 @@ def _macro_samples(samples: np.ndarray, valid_targets: np.ndarray) -> np.ndarray
     return result
 
 
+def _fold_embedding_context(config: dict, root: Path, manifest: dict, split: dict,
+                            common_inputs: dict[str, str]) -> str:
+    """Validate every fold artifact, then compare only its stable parent context."""
+    from .hvg_embeddings import validate_hvg_feature_scope
+
+    audit = manifest.get("features", {})
+    scope = audit.get("feature_scope", {})
+    if scope.get("encoder") != manifest["representation"].removeprefix("hvg_"):
+        raise ValueError("Fold embedding encoder disagrees with its representation")
+    stable_hash = validate_hvg_feature_scope(
+        config, root, audit, protocol=manifest["protocol"], fold=int(manifest["fold"]),
+        train_ids=list(map(str, split["train_ids"])), test_ids=list(map(str, split["test_ids"])))
+    recorded_inputs = manifest.get("input_sha256", {})
+    if not isinstance(recorded_inputs, dict):
+        raise ValueError("Fold embedding manifest lacks input checksums")
+    normalized_inputs = {str(Path(name).resolve()): digest for name, digest in recorded_inputs.items()}
+    for name, digest in normalized_inputs.items():
+        source = Path(name)
+        if not source.is_file() or file_sha256(source) != digest:
+            raise ValueError(f"Fold embedding input missing or altered: {source}")
+    for name, digest in common_inputs.items():
+        if normalized_inputs.get(str(Path(name).resolve())) != digest:
+            raise ValueError(f"Fold embedding common input disagrees with current data: {name}")
+    artifacts = scope.get("fold_artifacts", {})
+    if set(artifacts) != {"selection", "counts", "embedding", "audit"}:
+        raise ValueError("Fold embedding scope lacks its four fold artifacts")
+    fold_paths = set()
+    for artifact in artifacts.values():
+        name = str(Path(artifact["path"]).resolve())
+        if normalized_inputs.get(name) != artifact["sha256"]:
+            raise ValueError(f"Fold artifact checksum disagrees with manifest inputs: {name}")
+        fold_paths.add(name)
+    common_context = {name: manifest.get(name, {}) for name in
+                      ("config_sha256", "model_input_sha256", "code_sha256")}
+    common_context["input_sha256"] = {name: digest for name, digest in normalized_inputs.items()
+                                      if name not in fold_paths}
+    common_context["feature_scope_sha256"] = stable_hash
+    return _canonical_hash(common_context)
+
+
 def report(config: dict, root: Path) -> dict:
     """Report complete OOF methods and mark partial methods without ranking them.
 
@@ -118,7 +159,11 @@ def report(config: dict, root: Path) -> dict:
         protocol = manifest["protocol"]
         if protocol not in expected_splits:
             raise ValueError(f"Unexpected protocol {protocol}")
-        test_ids = set(map(str, expected_splits[protocol][int(manifest["fold"])]["test_ids"]))
+        fold = int(manifest["fold"])
+        if fold < 0 or fold >= len(expected_splits[protocol]):
+            raise ValueError(f"Manifest fold is outside the saved split: {path}")
+        split = expected_splits[protocol][fold]
+        test_ids = set(map(str, split["test_ids"]))
         if not set(frame.cell_id).issubset(test_ids):
             raise ValueError(f"Predictions include cells outside the declared test fold: {prediction_path}")
         if set(frame.target) - set(target_names):
@@ -130,8 +175,14 @@ def report(config: dict, root: Path) -> dict:
         if not np.allclose(observed_true, frame.y_true.to_numpy(float), equal_nan=True):
             raise ValueError(f"Prediction labels disagree with targets_raw.csv: {prediction_path}")
         frames.append(frame)
-        context = _canonical_hash({name: manifest.get(name, {}) for name in
-                                  ("config_sha256", "input_sha256", "model_input_sha256", "code_sha256")})
+        if manifest["representation"] in HVG_EMBEDDING_REPRESENTATIONS:
+            split_path = _path(config, root, "splits_dir", "data/splits") / f"{protocol}.json"
+            common_inputs = {str(source): file_sha256(source) for source in
+                             (prepared / "targets_raw.csv", prepared / "metadata.csv", split_path)}
+            context = _fold_embedding_context(config, root, manifest, split, common_inputs)
+        else:
+            context = _canonical_hash({name: manifest.get(name, {}) for name in
+                                      ("config_sha256", "input_sha256", "model_input_sha256", "code_sha256")})
         manifest_rows.append({**{key: manifest[key] for key in KEYS + ["fold"]}, "path": str(path), "context": context})
         sources[str(path)] = file_sha256(path)
         sources[str(prediction_path)] = file_sha256(prediction_path)

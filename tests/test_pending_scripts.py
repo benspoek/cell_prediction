@@ -14,7 +14,7 @@ import pytest
 ZSH = shutil.which("zsh")
 pytestmark = pytest.mark.skipif(os.name == "nt" or ZSH is None, reason="Requires POSIX and zsh")
 STATE = "results/pending_workflow"
-PILOT = f"{STATE}/pilot_with_hvg/timings.json"
+PILOT = f"{STATE}/pilot_with_hvg_encoders/timings.json"
 
 
 @pytest.fixture
@@ -22,7 +22,13 @@ def pending_cluster(tmp_path):
     root = tmp_path / "existing project with spaces"
     shutil.copytree(Path(__file__).resolve().parents[1] / "cluster", root / "cluster")
     (root / "configs").mkdir()
-    (root / "configs/custom config.yaml").write_text("{}\n")
+    (root / "configs/custom config.yaml").write_text(json.dumps({
+        "evaluation": {"protocols": ["cell_kfold", "mouse_group_kfold"], "n_splits": 10},
+        "paths": {"splits_dir": "data/splits"},
+    }))
+    (root / "data/splits").mkdir(parents=True)
+    for protocol in ("cell_kfold", "mouse_group_kfold"):
+        (root / "data/splits" / f"{protocol}.json").write_text(json.dumps({"folds": [{}] * 10}))
     (root / STATE).mkdir(parents=True)
     (root / STATE / "baseline-snapshot.json").write_text("{}\n")
     for relative in ("data/raw/original", "data/processed/original", "data/splits/original",
@@ -52,7 +58,7 @@ def pending_cluster(tmp_path):
         "    print(f'{value};testcluster' if '--parsable' in args else f'Submitted batch job {value}')\n"
         "elif command == 'squeue':\n"
         "    if os.environ.get('MOCK_QUEUE_FAIL'): sys.exit('controller unavailable')\n"
-        "    state_files = [root / f'results/{name}_workflow/slurm-jobs.tsv' for name in ('pending', 'hvg')]\n"
+        "    state_files = [root / f'results/{name}_workflow/slurm-jobs.tsv' for name in ('pending', 'hvg', 'hvg_embeddings')]\n"
         "    saved = [line.split('\\t')[1] for state_file in state_files if state_file.exists() for line in state_file.read_text().splitlines()]\n"
         "    default = ','.join(dict.fromkeys(saved)) if os.environ.get('MOCK_QUEUE_STATES') else ''\n"
         "    active = os.environ.get('MOCK_ACTIVE_IDS', default).split(',')\n"
@@ -60,7 +66,7 @@ def pending_cluster(tmp_path):
         "        if job: print(f'{job}|RUNNING')\n"
         "elif command == 'sacct' and os.environ.get('MOCK_ACCOUNTING_SUCCESS'):\n"
         "    job = args[args.index('-j') + 1]\n"
-        "    count = int(os.environ.get('MOCK_ACCOUNTING_TASKS', '420'))\n"
+        "    count = int(os.environ.get('MOCK_ACCOUNTING_TASKS', '600'))\n"
         "    for index in range(count):\n"
         "        code = '1:0' if index == 2 and os.environ.get('MOCK_ACCOUNTING_BAD_EXIT') else '0:0'\n"
         "        print(f'{job}_{index}|COMPLETED|{code}')\n"
@@ -79,8 +85,24 @@ def pending_cluster(tmp_path):
         "    if args[0] == 'jobs':\n"
         "        target = root / args[args.index('--output') + 1]\n"
         "        target.parent.mkdir(exist_ok=True)\n"
-        "        count = 120 if args[args.index('--stage') + 1] == 'hvg' else 420\n"
+        "        count = {'hvg': 120, 'hvg_embeddings': 180, 'pending': 600}[args[args.index('--stage') + 1]]\n"
         "        target.write_text('predictor\\n' + 'limix\\n' * count)\n"
+        "    if args[0] == 'hvg-panels' and '--check' in args and os.environ.get('MOCK_PANELS_MISSING'):\n"
+        "        sys.exit('native HVG panels required')\n"
+        "    if args[0] == 'hvg-embedding-check':\n"
+        "        missing = os.environ.get('MOCK_HVG_EMBEDDINGS_MISSING')\n"
+        "        if '--encoder' in args:\n"
+        "            encoder = args[args.index('--encoder') + 1]\n"
+        "            missing = missing or encoder in os.environ.get('MOCK_HVG_MISSING_ENCODERS', '').split(',')\n"
+        "        if '--first-only' in args:\n"
+        "            missing = os.environ.get('MOCK_HVG_FIRST_MISSING')\n"
+        "        if missing: sys.exit('valid HVG embeddings required')\n"
+        "    if args[0] == 'hvg-encoder-budget':\n"
+        "        if os.environ.get('MOCK_ENCODER_BUDGET_FAIL'): sys.exit('encoder budget exceeds remaining quota')\n"
+        "        indices = [int(i) for i in os.environ.get('MOCK_REMAINING_INDICES', ','.join(map(str,range(1,20)))).split(',') if i]\n"
+        "        jobs = [{'encoder': encoder, 'protocol': 'cell_kfold' if i < 10 else 'mouse_group_kfold', 'fold': i % 10}\n"
+        "                for encoder in ('genept','uce','nicheformer') for i in indices]\n"
+        "        print(json.dumps({'approved': True, 'within_budget': True, 'remaining_jobs': jobs}))\n"
         "    if args[0] == 'budget' and os.environ.get('MOCK_BUDGET_FAIL'):\n"
         "        print('measured estimate exceeds current remaining quota')\n"
         "        sys.exit(1)\n"
@@ -135,26 +157,18 @@ def submitted(pending_cluster):
     return [call for call in records(pending_cluster) if call["command"] == "sbatch"]
 
 
-def test_setup_checks_both_interpreters_and_snapshots_before_fetch(pending_cluster):
+def test_setup_reuses_existing_environments_and_snapshots_before_fetch(pending_cluster):
     root = pending_cluster[0]
-    snapshot = root / STATE / "baseline-snapshot.json"
-    snapshot.unlink()
-    result = invoke(pending_cluster, "setup")
+    (root / STATE / "baseline-snapshot.json").unlink()
+    result = invoke(pending_cluster, "setup", CPP_PYTHON="missing312", CPP_PYTHON_UCE="missing311")
     assert result.returncode == 0, result.stderr
     calls = records(pending_cluster)
-    assert [call["command"] for call in calls] == [
-        "python312", "python311", "state", "run", "bootstrap", "bootstrap", "bootstrap", "bootstrap", "state",
-    ]
-    assert calls[0]["args"][-1] == "3.12"
-    assert calls[1]["args"][-1] == "3.11"
-    assert calls[2]["args"] == [
+    assert [call["command"] for call in calls] == ["state", "run", "state"]
+    assert calls[0]["args"] == [
         "snapshot", "--root", str(root), "--config", "configs/custom config.yaml",
         "--state", f"{STATE}/baseline-snapshot.json",
     ]
-    assert calls[3]["args"] == ["prefetch", "--models", "limix", "kumo", "genept", "uce", "nicheformer"]
-    assert [call["args"] for call in calls if call["command"] == "bootstrap"] == [
-        ["limix"], ["kumo"], ["uce"], ["nicheformer"],
-    ]
+    assert calls[1]["args"] == ["prefetch", "--models", "limix", "kumo", "genept", "uce", "nicheformer"]
     assert submitted(pending_cluster) == []
     for relative in ("data/raw/original", "data/processed/original", "data/splits/original",
                      "results/cell_kfold/pca128/tabpfn/original"):
@@ -162,10 +176,11 @@ def test_setup_checks_both_interpreters_and_snapshots_before_fetch(pending_clust
 
 
 def test_setup_missing_uce_python_stops_before_downloads_and_snapshot(pending_cluster):
+    (pending_cluster[0] / ".venvs/uce/bin/python").unlink()
     result = invoke(pending_cluster, "setup", CPP_PYTHON_UCE="/missing/python3.11")
     assert result.returncode == 2
     assert "Python 3.11" in result.stderr
-    assert [call["command"] for call in records(pending_cluster)] == ["python312"]
+    assert records(pending_cluster) == []
 
 
 def test_setup_requires_existing_tabpfn_environment(pending_cluster):
@@ -184,7 +199,7 @@ def test_snapshot_failure_stops_before_prefetch_or_bootstrap(pending_cluster):
 
 
 def test_embeddings_and_serial_pilots_use_all_three_success_dependencies(pending_cluster):
-    result = invoke(pending_cluster, "embeddings")
+    result = invoke(pending_cluster, "embeddings", MOCK_EMBEDDINGS_MISSING="1")
     assert result.returncode == 0, result.stderr
     # Encoder jobs may still be running when pilots are submitted with dependencies.
     result = invoke(pending_cluster, "pilots", MOCK_QUEUE_STATES="RUNNING\n", MOCK_EMBEDDINGS_MISSING="1")
@@ -197,14 +212,16 @@ def test_embeddings_and_serial_pilots_use_all_three_success_dependencies(pending
     assert "--dependency=afterok:101:102:103" in calls[3]["args"]
     assert "--dependency=afterok:104" in calls[4]["args"]
     assert "--dependency=afterok:105" in calls[5]["args"]
-    assert calls[3]["args"][-10:] == [
+    assert calls[3]["args"][-15:] == [
         "cluster/pilot.sbatch", "tabpfn", "--representations", "genept", "uce", "nicheformer",
-        "hvg", "hvg_pca128", "--output", PILOT,
+        "hvg", "hvg_pca128", "hvg_genept", "hvg_uce", "hvg_nicheformer",
+        "--targets", "17", "--output", PILOT,
     ]
     for call, model in zip(calls[4:], ("limix", "kumo")):
-        assert call["args"][-13:] == [
+        assert call["args"][-18:] == [
             "cluster/pilot.sbatch", model, "--representations", "pca128", "ion_channels", "authors25",
-            "genept", "uce", "nicheformer", "hvg", "hvg_pca128", "--output", PILOT,
+            "genept", "uce", "nicheformer", "hvg", "hvg_pca128", "hvg_genept", "hvg_uce", "hvg_nicheformer",
+            "--targets", "17", "--output", PILOT,
         ]
     for call in calls:
         assert {"--export=ALL", "--parsable"} <= set(call["args"])
@@ -258,11 +275,11 @@ def test_pilots_reuse_completed_embeddings_with_expired_saved_ids(pending_cluste
     assert not any(call["command"] == "squeue" for call in records(pending_cluster))
 
 
-def test_submission_defaults_to_420_job_preview_without_budget_or_sbatch(pending_cluster):
+def test_submission_defaults_to_600_job_preview_without_budget_or_sbatch(pending_cluster):
     result = invoke(pending_cluster, "submit", CPP_ARRAY_CONCURRENCY="20")
     assert result.returncode == 0, result.stderr
-    assert "0-419%4" in result.stdout
-    assert "Jobs: 420; target/fold fits: 7140" in result.stdout
+    assert "0-599%4" in result.stdout
+    assert "Jobs: 600; target/fold fits: 10200" in result.stdout
     calls = records(pending_cluster)
     assert [call["args"] for call in calls if call["command"] == "run"] == [
         ["jobs", "--stage", "pending", "--output", "jobs/pending.tsv"],
@@ -299,7 +316,7 @@ def test_execute_saves_array_id_and_report_waits_for_its_success(pending_cluster
     assert result.returncode == 0, result.stderr
     calls = submitted(pending_cluster)
     assert len(calls) == 2
-    assert "--array=0-419%4" in calls[0]["args"]
+    assert "--array=0-599%4" in calls[0]["args"]
     assert "--export=ALL" in calls[0]["args"]
     assert calls[0]["args"][-2:] == ["cluster/evaluate.sbatch", "jobs/pending.tsv"]
     assert "--dependency=afterok:101" in calls[1]["args"]
@@ -319,14 +336,14 @@ def test_delayed_report_verifies_every_array_task_without_expired_dependency(pen
     ]
 
 
-@pytest.mark.parametrize("successful_tasks", ["0", "300", "419"])
+@pytest.mark.parametrize("successful_tasks", ["0", "300", "599"])
 def test_delayed_report_refuses_incomplete_or_missing_accounting(pending_cluster, successful_tasks):
     save_ids(pending_cluster, ("production", "1001"))
     result = invoke(
         pending_cluster, "report", MOCK_ACCOUNTING_SUCCESS="1", MOCK_ACCOUNTING_TASKS=successful_tasks,
     )
     assert result.returncode != 0
-    assert "does not confirm all 420 tasks" in result.stderr
+    assert "does not confirm all 600 tasks" in result.stderr
     assert submitted(pending_cluster) == []
 
 
@@ -334,7 +351,7 @@ def test_delayed_report_refuses_completed_task_with_nonzero_exit(pending_cluster
     save_ids(pending_cluster, ("production", "1001"))
     result = invoke(pending_cluster, "report", MOCK_ACCOUNTING_SUCCESS="1", MOCK_ACCOUNTING_BAD_EXIT="1")
     assert result.returncode != 0
-    assert "does not confirm all 420 tasks" in result.stderr
+    assert "does not confirm all 600 tasks" in result.stderr
     assert submitted(pending_cluster) == []
 
 
@@ -371,7 +388,7 @@ def test_unrelated_active_jobs_do_not_block_the_continuation(pending_cluster):
     save_ids(pending_cluster, ("production", "101"))
     result = invoke(pending_cluster, "submit", MOCK_ACTIVE_IDS="999", MOCK_QUEUE_STATES="RUNNING\n")
     assert result.returncode == 0, result.stderr
-    assert "0-419%4" in result.stdout
+    assert "0-599%4" in result.stdout
     assert submitted(pending_cluster) == []
 
 
@@ -443,11 +460,11 @@ def test_combined_pilots_preserve_legacy_timing_file(pending_cluster):
     assert all("hvg" in call["args"] and "hvg_pca128" in call["args"] for call in calls)
 
 
-def test_combined_submit_creates_one_production_array_for_all_420_tasks(pending_cluster):
+def test_combined_submit_creates_one_production_array_for_all_600_tasks(pending_cluster):
     result = invoke(pending_cluster, "submit", "--execute")
     assert result.returncode == 0, result.stderr
     [array] = submitted(pending_cluster)
-    assert "--array=0-419%4" in array["args"]
+    assert "--array=0-599%4" in array["args"]
     assert array["args"][-2:] == ["cluster/evaluate.sbatch", "jobs/pending.tsv"]
     budgets = [call for call in records(pending_cluster)
                if call["command"] == "run" and call["args"][0] == "budget"]

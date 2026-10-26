@@ -29,6 +29,16 @@ def parser() -> argparse.ArgumentParser:
     embed = sub.add_parser("embed")
     embed.add_argument("--encoder", required=True, choices=["genept", "uce", "nicheformer"])
     embed.add_argument("--device", default="cuda")
+    embed.add_argument("--gene-set", choices=["full", "hvg"], default="full")
+    embed.add_argument("--protocol", choices=["cell_kfold", "mouse_group_kfold"])
+    embed.add_argument("--fold", type=int)
+    panels = sub.add_parser("hvg-panels")
+    panels.add_argument("--check", action="store_true")
+    check = sub.add_parser("hvg-embedding-check")
+    check.add_argument("--encoder", choices=["genept", "uce", "nicheformer"])
+    check.add_argument("--first-only", action="store_true")
+    encoder_budget = sub.add_parser("hvg-encoder-budget")
+    encoder_budget.add_argument("--require-within-budget", action="store_true")
     evaluate = sub.add_parser("evaluate")
     evaluate.add_argument("--protocol", choices=["cell_kfold", "mouse_group_kfold"], required=True)
     evaluate.add_argument("--representation", required=True)
@@ -40,12 +50,12 @@ def parser() -> argparse.ArgumentParser:
     array.add_argument("--index", type=int, default=None)
     array.add_argument("--device", default="cuda")
     jobs = sub.add_parser("jobs")
-    jobs.add_argument("--stage", choices=["simple", "full", "pending", "hvg", "baselines", "rrr"], default="simple")
+    jobs.add_argument("--stage", choices=["simple", "full", "pending", "hvg", "hvg_embeddings", "baselines", "rrr"], default="simple")
     jobs.add_argument("--output", type=Path, required=True)
     pilot = sub.add_parser("pilot")
     pilot.add_argument("--predictors", nargs=1, choices=["tabpfn", "limix", "kumo"], required=True,
                        help="One model per invocation, using its isolated environment")
-    pilot.add_argument("--representations", nargs="+", default=["pca128", "ion_channels", "authors25", "genept", "uce", "nicheformer", "hvg", "hvg_pca128"])
+    pilot.add_argument("--representations", nargs="+", default=["pca128", "ion_channels", "authors25", "genept", "uce", "nicheformer", "hvg", "hvg_pca128", "hvg_genept", "hvg_uce", "hvg_nicheformer"])
     pilot.add_argument("--targets", type=int, default=2)
     pilot.add_argument("--output", type=Path,
                        help="Timing JSON path; predictions use its parent (default: results_dir/pilot/timings.json)")
@@ -110,10 +120,31 @@ def main(argv: list[str] | None = None) -> int:
             save_splits(plan, path)
             result[scheme] = {"path": path, "never_tested": len(plan.never_tested_ids)}
     elif command == "embed":
-        from .embeddings import generate_embedding
-        result = generate_embedding(args.encoder, config["embeddings"][args.encoder],
-                     resolve(root, config["paths"]["prepared_dir"]) / "counts.h5ad",
-                     resolve(root, config["paths"]["embeddings_dir"]), device=args.device, root=root, offline=True)
+        if args.gene_set == "hvg":
+            if args.protocol is None or args.fold is None:
+                raise ValueError("--gene-set hvg requires --protocol and --fold")
+            from .hvg_embeddings import generate_hvg_embedding
+            result = generate_hvg_embedding(args.encoder, config, root=root,
+                protocol=args.protocol, fold=args.fold, device=args.device, offline=True)
+        else:
+            if args.protocol is not None or args.fold is not None:
+                raise ValueError("--protocol and --fold require --gene-set hvg")
+            from .embeddings import generate_embedding
+            result = generate_embedding(args.encoder, config["embeddings"][args.encoder],
+                         resolve(root, config["paths"]["prepared_dir"]) / "counts.h5ad",
+                         resolve(root, config["paths"]["embeddings_dir"]), device=args.device, root=root, offline=True)
+    elif command == "hvg-panels":
+        from .hvg_embeddings import prepare_hvg_panels, check_hvg_panels
+        result = (check_hvg_panels if args.check else prepare_hvg_panels)(config, root)
+    elif command == "hvg-embedding-check":
+        from .hvg_embeddings import check_hvg_embeddings
+        result = check_hvg_embeddings(config, root, encoder=args.encoder, first_only=args.first_only)
+    elif command == "hvg-encoder-budget":
+        from .hvg_embeddings import encoding_budget
+        result = encoding_budget(config, root)
+        if args.require_within_budget and not result["within_budget"]:
+            print(json.dumps(result, indent=2, default=str))
+            raise RuntimeError("Set the actual remaining GPU hours and complete first-fold encoder pilots before submission")
     elif command in {"evaluate", "array-task"}:
         if command == "array-task":
             from .jobs import read_job
@@ -139,6 +170,12 @@ def main(argv: list[str] | None = None) -> int:
         else:
             pilot_path = resolve(root, args.output)
             pilot_config["paths"]["results_dir"] = str(pilot_path.parent)
+        if any(name in {"hvg_genept", "hvg_uce", "hvg_nicheformer"} for name in args.representations):
+            # Validate every fold before creating the common pilot fingerprint.
+            # Arrays may be queued with dependencies, but no pilot may start
+            # while any declared reusable encoder artifact is incomplete.
+            from .hvg_embeddings import check_hvg_embeddings
+            check_hvg_embeddings(config, root)
         signature = compute_fingerprint(config, root)
         result = {"runs": [], "fingerprint": signature, "pilot_targets": args.targets}
         if pilot_path.is_file():
@@ -153,6 +190,13 @@ def main(argv: list[str] | None = None) -> int:
                 if any(r["predictor"] == predictor and r["representation"] == representation
                        for r in result["runs"]):
                     continue
+                if representation in {"hvg_genept", "hvg_uce", "hvg_nicheformer"}:
+                    # Production array tasks start in separate processes. Clear
+                    # validation's resource hash cache so every measured pair
+                    # includes the same cold artifact validation cost.
+                    from . import hvg_embeddings as hvg_artifacts
+                    with hvg_artifacts._HASH_LOCK:
+                        hvg_artifacts._HASH_CACHE.clear()
                 started = time.perf_counter()
                 measured = evaluate_job(pilot_config, root, protocol="cell_kfold", representation=representation,
                                         predictor=predictor, fold=0, device=args.device)
