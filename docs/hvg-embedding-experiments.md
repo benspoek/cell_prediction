@@ -146,3 +146,19 @@ On failure, inspect logs and saved job IDs. Stop a failed waiting dependency
 chain before retrying; do not remove IDs to bypass active-job guards. Matching
 completed artifacts and target results are reused. Never clear immutable
 baselines or silently replace outputs to repair a provenance error.
+
+### UCE setup download recovery
+
+If setup previously stopped with `tarfile.ReadError: empty file`, pull the fix
+and rerun `zsh cluster/pending.sh setup`. No cache deletion is needed. The
+resource downloader now retries failed transfers, treats empty cached files as
+incomplete, and verifies all five UCE downloads against the published sizes and
+MD5 checksums in [Figshare article 24320806 v5](https://api.figshare.com/v2/articles/24320806).
+It uses Figshare's canonical download URLs and promotes a temporary download
+only after validation. Valid cached assets, existing manifests and experiment
+outputs remain intact. A continuing provider/network error stops setup with the
+asset path and reason; it never submits inference jobs with invalid resources.
+
+After setup succeeds, continue with `embeddings`, `panels`, and `encoder-pilot`
+as shown above. If those commands were entered separately after setup failed,
+inspect `zsh cluster/pending.sh status` and the logs before retrying them.

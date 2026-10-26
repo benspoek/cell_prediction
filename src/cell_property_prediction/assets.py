@@ -2,10 +2,14 @@
 from __future__ import annotations
 
 import csv
+import hashlib
+import http.client
 import io
 import json
 import os
 import subprocess
+import time
+import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
@@ -19,17 +23,93 @@ SOURCE_FILES = (
 )
 
 
+# Published UCE files, Figshare article 24320806 v5. Pin metadata so an empty,
+# truncated or HTML response cannot become a model resource. Download-only code
+# lives here to preserve the frozen encoder implementation fingerprints.
+# https://api.figshare.com/v2/articles/24320806
+_FIGSHARE_FILES = {
+    "42706555": (139, "ddf9143508857e62607f323b338ff383"),
+    "42706558": (4097781, "42a9b5871b1ed955fd05414b3ab89081"),
+    "42706585": (2979205876, "3523ea431c403f95701b6eeb0c30b997"),
+    "42715213": (2735410523, "6756d7fa8348e0f70b5e5b11e324f023"),
+    "43423236": (5686283829, "eed62d4fe51873c87bcf9660faa07707"),
+}
+
+
+def _md5(path: Path) -> str:
+    # MD5 verifies the publisher's checksum; provenance also records SHA256.
+    digest = hashlib.md5()
+    with path.open("rb") as handle:
+        for block in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
 def download(url: str, destination: Path) -> dict:
+    """Reuse valid assets; atomically publish only complete, nonempty downloads."""
+    destination = Path(destination)
     destination.parent.mkdir(parents=True, exist_ok=True)
-    if not destination.is_file():
+    parsed = urllib.parse.urlsplit(url)
+    prefix = {"figshare.com": "/ndownloader/files/",
+              "ndownloader.figshare.com": "/files/"}.get(parsed.hostname)
+    file_id = parsed.path[len(prefix):] if prefix and parsed.path.startswith(prefix) else None
+    expected = _FIGSHARE_FILES.get(file_id)
+    download_url = f"https://ndownloader.figshare.com/files/{file_id}" if expected else url
+
+    def valid_cache() -> bool:
+        if not destination.is_file() or destination.stat().st_size == 0:
+            return False
+        return expected is None or (destination.stat().st_size == expected[0]
+                                    and _md5(destination) == expected[1])
+
+    if not valid_cache():
         temporary = destination.with_name(destination.name + ".download")
-        request = urllib.request.Request(url, headers={"User-Agent": "cell-property-prediction/0.1"})
-        with urllib.request.urlopen(request, timeout=180) as source, temporary.open("wb") as output:
-            while block := source.read(1024 * 1024):
-                output.write(block)
-        os.replace(temporary, destination)
-    return {"url": url, "path": str(destination), "sha256": file_sha256(destination),
-            "bytes": destination.stat().st_size}
+        for attempt in range(3):
+            try:
+                request = urllib.request.Request(download_url, headers={
+                    "User-Agent": "cell-property-prediction/0.1", "Accept-Encoding": "identity"})
+                with urllib.request.urlopen(request, timeout=180) as response:
+                    status = getattr(response, "status", None)
+                    if status is not None and status != 200:
+                        raise ValueError(f"unexpected HTTP status {status}")
+                    headers = getattr(response, "headers", {})
+                    content_length = headers.get("Content-Length")
+                    declared_size = int(content_length) if content_length is not None else None
+                    if declared_size is not None and (declared_size <= 0 or
+                            (expected is not None and declared_size != expected[0])):
+                        raise ValueError(f"unexpected Content-Length {declared_size}; "
+                                         f"expected {expected[0] if expected else 'a nonempty response'}")
+                    digest = hashlib.md5()
+                    received = 0
+                    with temporary.open("wb") as output:
+                        while block := response.read(1024 * 1024):
+                            output.write(block)
+                            digest.update(block)
+                            received += len(block)
+                    if received == 0:
+                        raise ValueError("empty response")
+                    if declared_size is not None and received != declared_size:
+                        raise ValueError(f"incomplete response: {received} of {declared_size} bytes")
+                    if expected is not None:
+                        if received != expected[0]:
+                            raise ValueError(f"incorrect file size: {received}; expected {expected[0]} bytes")
+                        if digest.hexdigest() != expected[1]:
+                            raise ValueError("file checksum differs from the published Figshare MD5")
+                os.replace(temporary, destination)
+                break
+            except (OSError, urllib.error.URLError, http.client.HTTPException, ValueError) as error:
+                if attempt == 2:
+                    raise RuntimeError(f"Download failed for {destination} after 3 attempts: {error}. "
+                                       "No invalid download was installed. Retry setup; valid cached "
+                                       "assets will be reused.") from error
+                time.sleep(2 ** attempt)
+            finally:
+                temporary.unlink(missing_ok=True)
+    record = {"url": url, "path": str(destination), "sha256": file_sha256(destination),
+              "bytes": destination.stat().st_size}
+    if expected is not None:
+        record.update(download_url=download_url, expected_bytes=expected[0], published_md5=expected[1])
+    return record
 
 
 def fetch_data(config: dict, root: Path) -> dict:
