@@ -40,7 +40,7 @@ def parser() -> argparse.ArgumentParser:
     array.add_argument("--index", type=int, default=None)
     array.add_argument("--device", default="cuda")
     jobs = sub.add_parser("jobs")
-    jobs.add_argument("--stage", choices=["simple", "full", "pending", "baselines", "rrr"], default="simple")
+    jobs.add_argument("--stage", choices=["simple", "full", "pending", "hvg", "baselines", "rrr"], default="simple")
     jobs.add_argument("--output", type=Path, required=True)
     pilot = sub.add_parser("pilot")
     pilot.add_argument("--predictors", nargs=1, choices=["tabpfn", "limix", "kumo"], required=True,

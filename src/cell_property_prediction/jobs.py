@@ -15,6 +15,10 @@ FIELDS = ("protocol", "representation", "predictor", "fold")
 def create_jobs(config: dict, root: Path, stage: str, output: Path) -> list[dict]:
     if stage == "simple":
         representations, predictors = ["pca128", "ion_channels", "authors25"], ["tabpfn"]
+    elif stage == "hvg":
+        # An additive stage keeps the original configuration/result provenance
+        # intact while evaluating both new inputs with every foundation model.
+        representations, predictors = ["hvg", "hvg_pca128"], ["tabpfn", "limix", "kumo"]
     elif stage in {"full", "pending"}:
         representations = config["evaluation"]["representations"]
         predictors = [p for p in config["evaluation"]["predictors"] if p in {"tabpfn", "limix", "kumo"}]

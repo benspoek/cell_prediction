@@ -1,7 +1,9 @@
 #!/usr/bin/zsh
-# Continue the 15 remaining input/model pairs without rerunning the simple stage.
+# Continue the original matrix or add HVG inputs without rerunning completed work.
 set -euo pipefail
 ROOT=${CPP_ROOT:?Set CPP_ROOT to the existing project directory on the cluster}
+PROFILE=pending
+if [[ "${1:-}" == --hvg ]]; then PROFILE=hvg; shift; fi
 ACTION=${1:-help}
 if (( $# )); then shift; fi
 cd "$ROOT"
@@ -11,14 +13,34 @@ export CPP_ENV=core
 # The continuation runs at most four production GPU tasks concurrently.
 export CPP_ARRAY_CONCURRENCY=4
 PY="$ROOT/.venvs/core/bin/python"
-STATE=results/pending_workflow
+STATE="results/${PROFILE}_workflow"
 SNAPSHOT="$STATE/baseline-snapshot.json"
 IDS="$STATE/slurm-jobs.tsv"
 PILOT="$STATE/pilot/timings.json"
-JOBS=jobs/pending.tsv
+JOBS="jobs/$PROFILE.tsv"
+LAUNCHER="cluster/$PROFILE.sh"
+if [[ "$PROFILE" == hvg ]]; then
+    EXPECTED_TASKS=120
+    ENCODERS=()
+    TABPFN_INPUTS=(hvg hvg_pca128)
+    OTHER_INPUTS=(hvg hvg_pca128)
+    FETCH_MODELS=(limix kumo)
+    BOOTSTRAP_MODELS=(limix kumo)
+else
+    EXPECTED_TASKS=300
+    ENCODERS=(genept uce nicheformer)
+    TABPFN_INPUTS=(genept uce nicheformer)
+    OTHER_INPUTS=(pca128 ion_channels authors25 genept uce nicheformer)
+    FETCH_MODELS=(limix kumo genept uce nicheformer)
+    BOOTSTRAP_MODELS=(limix kumo uce nicheformer)
+fi
 
 usage() {
-    printf 'Usage: zsh cluster/pending.sh {setup|embeddings|pilots|submit [--execute]|report|status}\n'
+    if [[ "$PROFILE" == hvg ]]; then
+        printf 'Usage: zsh cluster/hvg.sh {setup|pilots|submit [--execute]|report|status}\n'
+    else
+        printf 'Usage: zsh cluster/pending.sh {setup|embeddings|pilots|submit [--execute]|report|status}\n'
+    fi
 }
 
 require_existing() {
@@ -30,7 +52,7 @@ require_existing() {
 
 preserved() {
     [[ -f "$SNAPSHOT" ]] || {
-        echo 'Missing continuation snapshot. Run zsh cluster/pending.sh setup first.' >&2
+        echo "Missing continuation snapshot. Run zsh $LAUNCHER setup first." >&2
         exit 2
     }
     "$PY" cluster/pending_state.py check --root "$ROOT" --config "$CPP_CONFIG" --state "$SNAPSHOT" "$@"
@@ -51,7 +73,7 @@ last_job() {
 remember() {
     [[ "$2" == <-> ]] || { echo "Invalid Slurm job ID: $2" >&2; exit 2; }
     printf '%s\t%s\n' "$1" "$2" >> "$IDS"
-    printf '%s=%s\n' "$1" "$2" | tee -a logs/pending-workflow-jobs.log
+    printf '%s=%s\n' "$1" "$2" | tee -a "logs/$PROFILE-workflow-jobs.log"
 }
 
 submit_job() {
@@ -110,6 +132,18 @@ print("\n".join(sorted(seen)))
 ALL_STAGES=(genept uce nicheformer pilot_tabpfn pilot_limix pilot_kumo production report)
 DOWNSTREAM_STAGES=(pilot_tabpfn pilot_limix pilot_kumo production report)
 
+# Downloads and encoder outputs change the common pilot fingerprint. Keep the
+# two workflows serial when they share this checkout and these model resources.
+guard_other_workflow() {
+    local other own_ids="$IDS"
+    for other in results/pending_workflow/slurm-jobs.tsv results/hvg_workflow/slurm-jobs.tsv; do
+        if [[ "$other" != "$own_ids" && -f "$other" ]]; then
+            local IDS="$other"
+            guard_active "${ALL_STAGES[@]}"
+        fi
+    done
+}
+
 case "$ACTION" in
     help|-h|--help) usage; exit 0;;
     setup|embeddings|pilots|report|status)
@@ -118,15 +152,24 @@ case "$ACTION" in
         (( $# == 0 )) || [[ $# == 1 && "$1" == --execute ]] || { usage >&2; exit 2; };;
     *) echo "Unknown action: $ACTION" >&2; usage >&2; exit 2;;
 esac
+if [[ "$PROFILE" == hvg && "$ACTION" == embeddings ]]; then
+    echo 'HVG inputs are fitted inside each evaluation fold; no embedding jobs are needed.' >&2
+    usage >&2; exit 2
+fi
 require_existing
 mkdir -p logs "$STATE"
 
 case "$ACTION" in
     setup)
-        # Check both interpreters before snapshot, downloads, or bootstrap work.
+        # Check required interpreters before snapshot, downloads, or bootstrap.
         PY312=${CPP_PYTHON:-python3.12}
         PY311=${CPP_PYTHON_UCE:-python3.11}
-        for item in "${PY312}:3.12" "${PY311}:3.11"; do
+        INTERPRETERS=("${PY312}:3.12")
+        if [[ "$PROFILE" == pending ]]; then INTERPRETERS+=("${PY311}:3.11"); fi
+        if [[ "$PROFILE" == hvg && -x "$ROOT/.venvs/limix/bin/python" && -x "$ROOT/.venvs/kumo/bin/python" ]]; then
+            INTERPRETERS=()
+        fi
+        for item in "${INTERPRETERS[@]}"; do
             executable=${item%:*}
             version=${item##*:}
             command -v "$executable" >/dev/null || {
@@ -135,17 +178,24 @@ case "$ACTION" in
             }
             "$executable" -c 'import sys; expected = tuple(map(int, sys.argv[1].split("."))); assert sys.version_info[:2] == expected, (sys.version, expected)' "$version"
         done
+        guard_other_workflow
         guard_active "${ALL_STAGES[@]}"
         "$PY" cluster/pending_state.py snapshot --root "$ROOT" --config "$CPP_CONFIG" --state "$SNAPSHOT"
         # Existing data, TabPFN, core, and tabpfn environments are never rebuilt.
-        zsh cluster/run.sh prefetch --models limix kumo genept uce nicheformer
-        for environment in limix kumo uce nicheformer; do
+        zsh cluster/run.sh prefetch --models "${FETCH_MODELS[@]}"
+        for environment in "${BOOTSTRAP_MODELS[@]}"; do
+            if [[ "$PROFILE" == hvg && -x "$ROOT/.venvs/$environment/bin/python" ]]; then continue; fi
             zsh cluster/bootstrap.sh "$environment"
         done
         preserved
-        printf 'Continuation setup complete. Next: zsh cluster/pending.sh embeddings\n'
+        if [[ "$PROFILE" == hvg ]]; then
+            printf 'HVG setup complete. Next: zsh cluster/hvg.sh pilots\n'
+        else
+            printf 'Continuation setup complete. Next: zsh cluster/pending.sh embeddings\n'
+        fi
         ;;
     embeddings)
+        guard_other_workflow
         guard_active "${ALL_STAGES[@]}"
         preserved
         for environment in uce nicheformer; do
@@ -159,15 +209,16 @@ case "$ACTION" in
         printf 'Encoder IDs saved in %s. Next: zsh cluster/pending.sh pilots\n' "$IDS"
         ;;
     pilots)
+        guard_other_workflow
         guard_active "${DOWNSTREAM_STAGES[@]}"
         preserved
         for environment in limix kumo; do
             [[ -x "$ROOT/.venvs/$environment/bin/python" ]] || {
-                echo "Missing $environment environment. Run pending.sh setup first." >&2; exit 2;
+                echo "Missing $environment environment. Run zsh $LAUNCHER setup first." >&2; exit 2;
             }
         done
         ENCODER_IDS=()
-        for encoder in genept uce nicheformer; do
+        for encoder in "${ENCODERS[@]}"; do
             last_job "$encoder"
             # Completed artifacts can outlive Slurm's controller records. Only
             # add dependencies for unfinished encoders whose jobs remain active.
@@ -194,19 +245,20 @@ case "$ACTION" in
         fi
         # Each job updates the same timing JSON, so serialize all three writers.
         submit_job pilot_tabpfn "${DEPENDENCY[@]}" cluster/pilot.sbatch tabpfn \
-            --representations genept uce nicheformer --output "$PILOT"
+            --representations "${TABPFN_INPUTS[@]}" --output "$PILOT"
         submit_job pilot_limix "--dependency=afterok:$LAST_JOB" cluster/pilot.sbatch limix \
-            --representations pca128 ion_channels authors25 genept uce nicheformer --output "$PILOT"
+            --representations "${OTHER_INPUTS[@]}" --output "$PILOT"
         submit_job pilot_kumo "--dependency=afterok:$LAST_JOB" cluster/pilot.sbatch kumo \
-            --representations pca128 ion_channels authors25 genept uce nicheformer --output "$PILOT"
+            --representations "${OTHER_INPUTS[@]}" --output "$PILOT"
         printf 'After all pilots succeed, update the actual remaining GPU-hour budget before submit --execute.\n'
         ;;
     submit)
+        guard_other_workflow
         guard_active "${ALL_STAGES[@]}"
         preserved
-        zsh cluster/run.sh jobs --stage pending --output "$JOBS"
+        zsh cluster/run.sh jobs --stage "$PROFILE" --output "$JOBS"
         if (( $# )); then
-            preserved --embeddings
+            if [[ "$PROFILE" == pending ]]; then preserved --embeddings; fi
             # submit.sh performs the current-quota check with these pilot timings
             # before sbatch. Retain its normal output for the existing workflow.
             OUTPUT=$(zsh cluster/submit.sh "$JOBS" --pilot "$PILOT" --execute) || {
@@ -224,7 +276,7 @@ case "$ACTION" in
         preserved
         guard_active report
         last_job production
-        [[ -n "$LAST_ID" ]] || { echo 'No saved production array ID; run pending.sh submit --execute first.' >&2; exit 2; }
+        [[ -n "$LAST_ID" ]] || { echo "No saved production array ID; run zsh $LAUNCHER submit --execute first." >&2; exit 2; }
         queue_ids "$LAST_ID"
         if [[ -n "${ACTIVE_IDS//[[:space:]]/}" ]]; then
             submit_job report "--dependency=afterok:$LAST_ID" cluster/stage.sbatch report
@@ -238,16 +290,17 @@ case "$ACTION" in
             printf '%s\n' "$ACCOUNTING" | "$PY" -c '
 import sys
 job_id = sys.argv[1]
+task_count = int(sys.argv[2])
 rows = {}
 for line in sys.stdin.read().splitlines():
     fields = [field.strip() for field in line.split("|")]
     if len(fields) >= 3:
         rows[fields[0]] = fields[1:3]
-expected = {f"{job_id}_{index}" for index in range(300)}
+expected = {f"{job_id}_{index}" for index in range(task_count)}
 bad = [task for task in sorted(expected) if rows.get(task) != ["COMPLETED", "0:0"]]
 if bad:
-    raise SystemExit(f"Production accounting does not confirm all 300 tasks completed with exit 0; missing/failed examples: {bad[:5]}. Inspect sacct and retry the array before report.")
-' "$LAST_ID"
+    raise SystemExit(f"Production accounting does not confirm all {task_count} tasks completed with exit 0; missing/failed examples: {bad[:5]}. Inspect sacct and retry the array before report.")
+' "$LAST_ID" "$EXPECTED_TASKS"
             submit_job report cluster/stage.sbatch report
         fi
         ;;

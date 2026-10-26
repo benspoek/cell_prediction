@@ -9,6 +9,11 @@ After completing those three benchmarks, follow the
 15 input/model combinations with `zsh cluster/pending.sh`. It preserves the
 completed folds and submits a separate 300-task continuation array.
 
+For the authors' approximately 1,000 highly variable genes and PCA128 of those
+genes, follow the [HVG experiment guide](docs/hvg-experiments.md). The additional
+`zsh cluster/hvg.sh` workflow evaluates both inputs with all three foundation
+models on the same saved cell and mouse-held-out folds (120 additional tasks).
+
 Reproduzierbarer Benchmark für die Vorhersage von 17 elektrophysiologischen
 Zelleigenschaften aus Einzelzell-Genexpression. Ausgangspunkt ist Scala et al.,
 *Phenotypic variation of transcriptomic cell types in mouse motor cortex*
@@ -39,7 +44,12 @@ Die drei einfachen TabPFN-3.5-Benchmarks verwenden:
 Im vollständigen Vergleich kommen drei eingefrorene Zellrepräsentationen hinzu:
 GenePT v2 (3.072 Dimensionen), UCE mit 33 Schichten (1.280) und Nicheformer (512).
 Alle sechs Repräsentationen werden mit TabPFN 3.5, LimiX-2 und Kumo Tabular Large
-verglichen. Ridge und ein Trainingsmittelwert bilden Kontrollmodelle. Eine
+verglichen. Zwei zusätzliche Expressionsrepräsentationen, `hvg` und
+`hvg_pca128`, verwenden die Nullraten-/Expressionsregel der Autoren für etwa
+1.000 Gene; die zweite reduziert diese Gene anschließend auf maximal 128
+PCA-Komponenten. Genwahl, Skalierung und PCA werden in jedem Trainingsfold neu
+angepasst. Beide werden ebenfalls mit allen drei Foundation-Modellen geprüft.
+Ridge und ein Trainingsmittelwert bilden Kontrollmodelle. Eine
 zusätzliche Sparse-RRR-Baseline wählt 1.000 Gene und ihre Hyperparameter innerhalb
 der Trainingsfolds aus. Es findet kein Encoder-Finetuning statt.
 
@@ -166,6 +176,7 @@ zsh cluster/run.sh jobs --stage simple --output jobs/simple.tsv
 zsh cluster/run.sh jobs --stage full --output jobs/full.tsv
 zsh cluster/run.sh jobs --stage baselines --output jobs/baselines.tsv
 zsh cluster/run.sh jobs --stage rrr --output jobs/rrr.tsv
+zsh cluster/run.sh jobs --stage hvg --output jobs/hvg.tsv
 zsh cluster/run.sh budget --jobs jobs/full.tsv
 ```
 
@@ -178,6 +189,14 @@ verhindern, dass alte Pilotmessungen nach neuen Downloads weiterverwendet werden
 `full` ist die vollständige 360-Job-Matrix, insbesondere für frische Läufe. Die Budgetschätzung ist konservativ
 (Pilotzeit × Targetanzahl × Faktor 2), ersetzt aber keine Messung der ganzen
 Laufzeit und des GPU-Speichers.
+
+`hvg` ergänzt die ursprüngliche Matrix um sechs weitere Eingabe/Modell-Paare,
+120 Jobs und 2.040 Target/Fold-Fits. Es ist ein eigener Zusatz zum unveränderten
+`full`- bzw. `pending`-Manifest. Die ursprünglichen sechs Eingaben plus beide
+HVG-Eingaben ergeben insgesamt acht Eingaben × drei Modelle × zwei Protokolle ×
+zehn Folds, also 480 Jobs. Für den zusätzlichen HVG-Lauf werden separate Piloten
+und ein eigenes Budget verwendet; die Anleitung steht im
+[HVG experiment guide](docs/hvg-experiments.md).
 
 ```zsh
 # Standard: nur Kommando anzeigen.

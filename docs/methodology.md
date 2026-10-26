@@ -40,7 +40,7 @@ Vor der Hauptauswertung werden die Transformationen rückgängig gemacht.
 ## Repräsentationen
 
 Die gespeicherten Counts bestehen aus Exon plus Intron. Beide Matrizen bleiben
-zusätzlich als eigene Layer erhalten. Für die drei Expressionsbenchmarks wird
+zusätzlich als eigene Layer erhalten. Für die Expressionsbenchmarks wird
 die Autorentransformation verwendet:
 
 ```text
@@ -66,6 +66,36 @@ Dieses Panel wurde ursprünglich mit Kenntnis der Gesamtkohorte ausgewählt. Sei
 Ergebnis ist ein Vergleich auf einer publizierten festen Auswahl, keine
 unverzerrte Bewertung einer innerhalb der neuen Trainingsfolds ausgewählten
 25-Gen-Signatur. In einem Trainingsfold konstante Gene werden entfernt.
+
+Die zusätzlichen Eingaben `hvg` und `hvg_pca128` verwenden die Genwahl aus dem
+[fixierten Autoren-Notebook](https://github.com/berenslab/mini-atlas/blob/3bf98a524b8e48aa8647e1b9ae8f2351d9c712c9/code/reduced-rank-regression.ipynb).
+Die Funktion `rnaseqTools.geneSelection` betrachtet den Anteil der Zellen mit
+höchstens 32 Exon-Counts und die mittlere log2-Expression der übrigen Zellen.
+Sie wählt Gene oberhalb einer exponentiellen Nullraten-Grenze aus. Der
+horizontale Offset dieser Grenze wird per binärer Suche auf etwa 1.000 Gene
+angepasst (`n=1000`, `threshold=32`, `atleast=10`, `decay=1.5`,
+`yoffset=0.02`, anfänglicher `xoffset=5`). Bei Bindungen muss die Auswahl nicht
+exakt 1.000 Gene ergeben; die tatsächliche Anzahl wird protokolliert. Dies ist
+die Autorenregel und keine einfache Rangfolge nach Varianz.
+
+Im ursprünglichen Notebook erfolgt diese Genwahl auf der gesamten Kohorte vor
+der Kreuzvalidierung. Hier wird sie für jeden äußeren Trainingsfold auf dessen
+rohen **Exon-Counts** neu angepasst, ohne die Testzellen einzubeziehen. Die
+ausgewählten Symbole, Parameter und Eingabe-Hashes stehen im Fold-Manifest.
+Die Genlisten können zwischen Folds variieren, sind innerhalb eines Folds aber
+für alle drei Prädiktoren und für beide HVG-Eingaben gleich. Konstante Gene im
+Training werden entfernt. Die Feature-Werte bleiben die oben definierte
+log2-normalisierte Expression aus Exon und Intron, mit Bibliotheksgröße über
+alle Gene; sie werden anhand des Trainings skaliert.
+
+`hvg` reicht diese etwa 1.000 Gen-Features direkt an den jeweiligen Prädiktor
+weiter. `hvg_pca128` passt zusätzlich eine PCA nur an diese skalierten
+Trainingsdaten an und transformiert die Testzellen mit derselben PCA. Die
+Komponentenzahl ist auf `min(128, n_train - 1, n_selected_genes)` begrenzt.
+Die bestehende Eingabe `pca128` verwendet dagegen alle ausreichend detektierten,
+im Training variierenden Gene, ohne diese HVG-Auswahl. Die HVG-Experimente nutzen
+dieselben gespeicherten `cell_kfold`- und `mouse_group_kfold`-Splits wie die
+übrigen Hauptbenchmarks; sie verwenden nicht den separaten historischen Split.
 
 GenePT verwendet log1p(CPM10k), mit Bibliotheksgröße aus allen Genen, feste
 eindeutige Maus-Mensch-Orthologe und die originalen 3.072-dimensionalen

@@ -17,6 +17,7 @@ from sklearn.model_selection import GroupKFold, KFold
 from sklearn.preprocessing import StandardScaler
 
 from .config import atomic_json, compute_config, file_sha256, resolve
+from .hvg import HVG_REPRESENTATIONS
 
 FORMAT_VERSION = 1
 BASELINE_REPRESENTATIONS = {"pca128", "ion_channels", "authors25"}
@@ -96,6 +97,9 @@ def _read_ion_genes(path: Path, gene_names: np.ndarray) -> tuple[set[str], dict]
 def _features(config: dict, root: Path, representation: str, train_ids: list[str],
               test_ids: list[str]) -> tuple[np.ndarray, np.ndarray, dict, dict[str, str]]:
     prepared = _path(config, root, "prepared_dir", "data/processed")
+    if representation in HVG_REPRESENTATIONS:
+        from .hvg import build_features
+        return build_features(config, prepared, representation, train_ids, test_ids)
     if representation not in BASELINE_REPRESENTATIONS:
         source = _path(config, root, "embeddings_dir", "embeddings") / f"{representation}.npz"
         with np.load(source, allow_pickle=False) as archive:
@@ -272,6 +276,10 @@ def evaluate_fold(config: dict, *, root: Path, protocol: str, representation: st
                    (Path(__file__), Path(__file__).with_name("data.py"), Path(__file__).with_name("models.py"),
                     Path(__file__).with_name("config.py"))
                    if path.is_file()}
+    if representation in HVG_REPRESENTATIONS:
+        for name in ("hvg.py", "rrr.py"):
+            path = Path(__file__).with_name(name)
+            code_inputs[str(path)] = file_sha256(path)
     fingerprint = _canonical_hash({"format_version": FORMAT_VERSION, "config": compute_config(config),
                                     "protocol": protocol, "representation": representation,
                                     "predictor": predictor, "fold": fold, "device": device,
@@ -324,7 +332,7 @@ def evaluate_fold(config: dict, *, root: Path, protocol: str, representation: st
                 return inner_feature_cache[key]
             prediction, audit = _ridge_predict(config, train[observed], y, query,
                                                 training_groups[observed], protocol,
-                                                inner_features if representation in BASELINE_REPRESENTATIONS else None)
+                                                inner_features if representation in BASELINE_REPRESENTATIONS | HVG_REPRESENTATIONS else None)
         elif predictor == "mean":
             prediction, audit = np.full(len(test_ids), y.mean()), {"kind": "training_transformed_target_mean"}
         else:
