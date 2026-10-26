@@ -250,6 +250,98 @@ def fetch_orthologs(destination: Path) -> dict:
     return result
 
 
+_NICHEFORMER_MEAN_COMMIT = "485cadbc5caa15119adfd54228f8a8af835fcabc"
+_NICHEFORMER_MEAN_BLOB = "ed8548c5ac014a676a639f3214a419c753e5f323"
+_NICHEFORMER_MEAN_POLICY = "dissociated_notebook_half_up_min_one"
+
+
+def _prepare_nicheformer_mean(raw: Path, destination: Path, reference_genes: int) -> dict:
+    """Apply the authors' dissociated notebook policy without modifying raw bytes."""
+    import numpy as np
+
+    values = np.asarray(np.load(raw, allow_pickle=False), dtype=np.float64)
+    if values.ndim != 1 or values.shape != (reference_genes,):
+        raise ValueError("Nicheformer raw mean must match the native reference gene count exactly")
+    if np.isinf(values).any() or (values < 0).any():
+        raise ValueError("Nicheformer raw means contain infinity or negative values")
+    # The official dissociated mouse-brain notebook sanitizes, rounds half-up,
+    # and substitutes one for rounded zeros before passing means to the tokenizer.
+    clean = np.nan_to_num(values, nan=0.0)
+    rounded = np.where((clean % 1) >= 0.5, np.ceil(clean), np.floor(clean))
+    prepared = np.where(rounded == 0, 1.0, rounded)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    temporary = destination.with_name(destination.name + ".prepared.tmp")
+    try:
+        with temporary.open("wb") as handle:
+            np.save(handle, prepared, allow_pickle=False)
+        raw_sha = file_sha256(raw)
+        prepared_sha = file_sha256(temporary)
+        if destination.exists():
+            current = file_sha256(destination)
+            if current not in {raw_sha, prepared_sha}:
+                raise ValueError("Existing Nicheformer means differ from both the raw source and prepared means; "
+                                 "preserve the existing file and inspect its provenance")
+            if current == prepared_sha:
+                temporary.unlink()
+            else:
+                os.replace(temporary, destination)
+        else:
+            os.replace(temporary, destination)
+    finally:
+        temporary.unlink(missing_ok=True)
+    return {"policy": _NICHEFORMER_MEAN_POLICY, "reference_genes": reference_genes,
+            "raw_nan_count": int(np.isnan(values).sum()),
+            "rounded_zero_count": int((rounded == 0).sum()),
+            "source": f"https://github.com/theislab/nicheformer/blob/{_NICHEFORMER_MEAN_COMMIT}/"
+                      "notebooks/tokenization/scRNAseq_mouse_brain_haviv.ipynb#L502-L504",
+            "raw_sha256": raw_sha, "prepared_sha256": prepared_sha}
+
+
+def prefetch_nicheformer_resources(config: dict, *, root: Path) -> dict:
+    """Freeze original means and the explicit author-normalized denominator array.
+
+    Keep this preparation outside embeddings.py so frozen GenePT/UCE encoder
+    fingerprints remain unchanged. Existing complete resource manifests are verified.
+    """
+    import anndata as ad
+    from .embeddings import build_nicheformer_gene_mapping
+
+    destination = resolve(root, config["technology_mean_path"])
+    manifest_path = destination.parent / "prefetch.json"
+    if manifest_path.is_file():
+        previous = json.loads(manifest_path.read_text(encoding="utf-8"))
+        if previous.get("normalization", {}).get("policy") != _NICHEFORMER_MEAN_POLICY:
+            raise ValueError("Existing frozen Nicheformer resources use another mean policy; inspect their provenance")
+        if Path(previous["technology_mean"]["path"]).resolve() != destination.resolve():
+            raise ValueError("Frozen Nicheformer means do not match the configured path")
+        verify_resource_record(previous)
+        return previous
+    repo = resolve(root, config.get("repo_dir", "vendor/Nicheformer"))
+    vendor = clone_vendor("https://github.com/theislab/nicheformer.git", repo,
+                          config.get("vendor_revision"))
+    raw = destination.with_name(destination.stem + ".raw.npy")
+    raw_record = download(f"https://raw.githubusercontent.com/theislab/nicheformer/{_NICHEFORMER_MEAN_COMMIT}/"
+                          "data/model_means/dissociated_mean_script.npy", raw)
+    payload = raw.read_bytes()
+    blob = hashlib.sha1(f"blob {len(payload)}\0".encode() + payload).hexdigest()
+    if blob != _NICHEFORMER_MEAN_BLOB:
+        raise ValueError("Nicheformer raw mean differs from the pinned official Git blob; preserve it for inspection")
+    reference = ad.read_h5ad(resolve(root, config["checkpoint_dir"]) / "model.h5ad", backed="r")
+    try:
+        reference_genes = reference.n_vars
+    finally:
+        if getattr(reference, "file", None) is not None:
+            reference.file.close()
+    normalization = _prepare_nicheformer_mean(raw, destination, reference_genes)
+    mapping = build_nicheformer_gene_mapping(config, root=root)
+    result = {"vendor": vendor, "raw_technology_mean": raw_record,
+              "technology_mean": {"path": str(destination), "sha256": file_sha256(destination),
+                                  "bytes": destination.stat().st_size},
+              "normalization": normalization, "gene_mapping": mapping}
+    atomic_json(manifest_path, result)
+    return result
+
+
 def prefetch_models(config: dict, root: Path, names: list[str]) -> dict:
     """Download authentic checkpoints; store immutable revisions for subsequent offline jobs."""
     cache = resolve(root, config["paths"]["cache_dir"])
@@ -317,8 +409,7 @@ def prefetch_models(config: dict, root: Path, names: list[str]) -> dict:
             from .embeddings import prefetch_uce
             record["resources"] = prefetch_uce(config["embeddings"][name], root=root)
         elif name == "nicheformer":
-            from .embeddings import prefetch_nicheformer
-            record["resources"] = prefetch_nicheformer(config["embeddings"][name], root=root)
+            record["resources"] = prefetch_nicheformer_resources(config["embeddings"][name], root=root)
         elif name not in hf_models:
             raise ValueError(f"Unknown model resource name: {name}")
         manifest[name] = record

@@ -162,3 +162,24 @@ asset path and reason; it never submits inference jobs with invalid resources.
 After setup succeeds, continue with `embeddings`, `panels`, and `encoder-pilot`
 as shown above. If those commands were entered separately after setup failed,
 inspect `zsh cluster/pending.sh status` and the logs before retrying them.
+
+### Nicheformer dissociated reference means
+
+The released 20,310-gene dissociated mean array contains NaNs. Before inference,
+setup now follows the authors' [mouse-brain tokenization notebook](https://github.com/theislab/nicheformer/blob/485cadbc5caa15119adfd54228f8a8af835fcabc/notebooks/tokenization/scRNAseq_mouse_brain_haviv.ipynb#L502-L504):
+convert NaNs to zero, round half-up, and replace rounded zeros with one. These
+are reference normalization denominators, not missing measurements in our cells.
+
+The original array is pinned by its upstream Git blob, retained separately as
+`dissociated_mean.raw.npy`, and never overwritten. The prepared denominator array
+is saved as `dissociated_mean.npy`; raw and prepared SHA256 hashes, the policy,
+NaN count and source are recorded in the resource manifest. Reference length,
+infinities and negative values remain checked. Existing frozen resources with a
+different policy fail for explicit provenance review. Encoder code and previously
+completed simple TabPFN results are unchanged.
+
+For the setup failure `Downloaded Nicheformer means are not a finite nonnegative
+array`, pull the fix and rerun `zsh cluster/pending.sh setup`. The legacy raw file
+at the prepared path is replaced only if it exactly matches the verified raw
+source. Other cached downloads are reused. Then continue with `embeddings`,
+`panels`, and `encoder-pilot` (without a trailing `~`).
