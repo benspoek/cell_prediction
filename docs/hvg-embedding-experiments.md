@@ -195,3 +195,106 @@ array`, pull the fix and rerun `zsh cluster/pending.sh setup`. The legacy raw fi
 at the prepared path is replaced only if it exactly matches the verified raw
 source. Other cached downloads are reused. Then continue with `embeddings`,
 `panels`, and `encoder-pilot` (without a trailing `~`).
+
+
+## Optional GPU-login continuation
+
+For a time-critical run covered by the service desk's login-node advice,
+`cluster/login_hvg.py` can replace the queued UCE/Nicheformer HVG encoder
+arrays. This is an operational alternative to the existing Slurm phase; it
+uses the same saved panels, native environments, resource files and exact
+`cuda` device setting. It does not change scientific sources, configuration,
+completed outputs or computation fingerprints.
+
+The [RWTH login limits](https://help.itc.rwth-aachen.de/en/service/rhr4fjjutttf/article/0a23d513f31b4cf1849986aaed475789/)
+include four CPUs per user, 30 minutes of GPU access per process, and fair use
+of the shared node. The [GPU development guidance](https://help.itc.rwth-aachen.de/en/service/rhr4fjjutttf/article/a1beccd9e9dc4044a740ed248f478839/)
+identifies `login23-g-1`, describes the full-GPU and MIG devices, and recommends
+UUID-based device selection. The two first-fold pilots took 136 seconds for
+UCE and 69 seconds for Nicheformer. At those rates, the remaining 19 folds per
+encoder take about 65 minutes in total when run serially, potentially longer
+with four CPUs or shared storage. Ten-minute fold timeouts do not make that
+aggregate workload a short development test. Use Slurm when the login-node
+allowance does not cover the whole run.
+
+Connect from PowerShell:
+
+```powershell
+ssh -o HostName=login23-g-1.hpc.itc.rwth-aachen.de rwth-claix
+```
+
+Inspect availability on that node before selecting an available full GPU or
+an appropriate MIG instance; host RAM measurements do not establish GPU VRAM
+requirements:
+
+```zsh
+nvidia-smi -L
+nvidia-smi
+```
+
+Use the existing tmux session if already inside one. Otherwise start a session
+with `tmux new -A -s cellpred`. From the project directory:
+
+```zsh
+cd ~/SMPC/cell_prediction
+git pull --ff-only
+export CPP_ROOT="$PWD"
+export CPP_CONFIG=configs/cluster.local.yaml
+.venvs/core/bin/python cluster/login_hvg.py
+```
+
+That last command is a dry run. It validates existing UCE/Nicheformer artifacts
+and lists the missing folds and saved jobs that would be held. It cannot change
+Slurm jobs or run an encoder. Set `CPP_LOGIN_GPU` to the **available UUID from
+your own output**, replacing the example placeholder below:
+
+```zsh
+export CPP_LOGIN_GPU='GPU-REPLACE-WITH-AVAILABLE-UUID'
+.venvs/core/bin/python cluster/login_hvg.py --execute --gpu "$CPP_LOGIN_GPU"
+```
+
+The execution sequence is:
+
+1. Hold active saved UCE/Nicheformer encoder arrays and pending predictor
+   pilots, validating their owner, account, project directory and job name.
+   Historical active entries are included to avoid duplicate writers. If an
+   encoder task is already running, future tasks stay held and the helper stops;
+   wait for the current task to finish and rerun the same command. A running
+   predictor or other project job prevents manual execution.
+2. Validate existing artifacts and compute only missing folds, sequentially on
+   one explicit GPU. The supervisor and its children inherit affinity to at most
+   four CPUs. Native thread settings are also capped at four, downloads are
+   disabled, and each fold has a ten-minute timeout. Short-lived native probes
+   verify CUDA visibility before starting the fold sequence.
+3. Validate all 60 HVG embeddings, including GenePT, before canceling the old
+   held encoder arrays and pending model pilots. The append-only Slurm job
+   history remains intact. Submit replacement prediction pilots with:
+
+```zsh
+zsh cluster/pending.sh pilot
+```
+
+`--max-folds 1` can be added to the execution command for a one-fold trial. A
+successful partial run releases only holds acquired by this helper, allowing
+the original Slurm chain to continue and reuse the newly completed artifact.
+It does not cancel any job. After all prediction pilots finish, continue with
+`zsh cluster/pending.sh submit --execute` as usual.
+
+Progress and process-group IDs are recorded in
+`results/pending_workflow/login-hvg.json`; per-fold output is in
+`results/pending_workflow/login-hvg-logs/`. The supervisor uses a lock, handles
+Ctrl+C/SIGTERM/SIGHUP, and terminates the whole native process group on a timeout
+or interruption. On failure, holds and any partial artifacts are preserved.
+Resume with the same command after inspecting its log. It refuses to resume or
+release holds while a recorded native process group is still alive. A hard
+kill or host failure can require manual inspection of that recorded group.
+To return jobs to Slurm after the native process has stopped:
+
+```zsh
+.venvs/core/bin/python cluster/login_hvg.py --release
+```
+
+Do not delete partial immutable artifacts or the saved Slurm history to bypass
+a validation or active-writer error. If cancellation has not yet disappeared
+from the controller, wait briefly and rerun the helper to confirm completion
+before submitting replacement pilots.
