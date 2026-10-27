@@ -176,10 +176,12 @@ Gespeicherte Target-Laufzeiten werden bei einem Neustart berücksichtigt.
 
 ## Jobmatrix erstellen und ausführen
 
-Nach den Piloten das **aktuell verbleibende** GPU-Stundenbudget in
-`configs/benchmark.yaml`, `cluster.remaining_gpu_hours`, eintragen. Die gesamte
-Projektzuteilung ist kein Nachweis des Restbudgets. Diese eine Änderung
-invalidiert den Piloten nicht.
+Nach den Piloten lesen die Budgetprüfungen das **aktuell verbleibende**
+GPU-Stundenbudget automatisch mit `r_wlm_usage -q -p <cluster.account>` aus.
+Maßgeblich ist `Consumable gpu-h` im ML-Abschnitt der Ausgabe, nicht die gesamte
+Projektzuteilung. `cluster.account` bestimmt den abgefragten Account;
+ein Kopieren von Stundenwerten in YAML ist nicht nötig. `quota` zeigt Account,
+Reststunden, Abfragezeit und Quelle an:
 
 ```zsh
 zsh cluster/run.sh jobs --stage simple --output jobs/simple.tsv
@@ -188,6 +190,7 @@ zsh cluster/run.sh jobs --stage baselines --output jobs/baselines.tsv
 zsh cluster/run.sh jobs --stage rrr --output jobs/rrr.tsv
 zsh cluster/run.sh jobs --stage hvg --output jobs/hvg.tsv
 zsh cluster/run.sh jobs --stage hvg_embeddings --output jobs/hvg_embeddings.tsv
+zsh cluster/run.sh quota
 zsh cluster/run.sh budget --jobs jobs/full.tsv
 ```
 
@@ -199,7 +202,15 @@ die übrigen 600 Jobs bzw. 10.200 Fits einschließlich aller HVG-Eingaben. Seine
 verhindern, dass alte Pilotmessungen nach neuen Downloads weiterverwendet werden.
 `full` ist die vollständige 660-Job-Matrix, insbesondere für frische Läufe. Die Budgetschätzung ist konservativ
 (Pilotzeit × Targetanzahl × Faktor 2), ersetzt aber keine Messung der ganzen
-Laufzeit und des GPU-Speichers.
+Laufzeit und des GPU-Speichers. Jede Encoder-Budgetprüfung und jede ausgeführte
+GPU-Produktionseinreichung fragt die Quote erneut ab. Schlägt die Abfrage fehl,
+stoppt die Budgetfreigabe mit einem Fehler; sie verwendet keinen alten YAML-Wert.
+Für eine ausdrücklich gewählte Konfigurationsquelle kann
+`CPP_QUOTA_SOURCE=config` vor den Befehl gesetzt werden, zum Beispiel
+`CPP_QUOTA_SOURCE=config zsh cluster/pending.sh encoders` oder
+`CPP_QUOTA_SOURCE=config zsh cluster/pending.sh submit --execute`. Dann muss der
+bereits konfigurierte Wert `cluster.remaining_gpu_hours` tatsächlich verfügbar
+sein. Die Abfrage verändert weder die YAML-Datei noch Pilot-Fingerprints.
 
 `hvg` ist die optionale direkte HVG-Teilmenge (120 Jobs, 2.040 Fits).
 `hvg_embeddings` ist die Teilmenge aus HVG→GenePT, HVG→UCE und HVG→Nicheformer

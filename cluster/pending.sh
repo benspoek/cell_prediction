@@ -328,7 +328,7 @@ case "$ACTION" in
             if zsh cluster/run.sh hvg-embedding-check --encoder "$encoder" --first-only > "$STATE/$encoder-first-readiness.log" 2>&1; then continue; fi
             submit_hvg_encoder "$encoder" 0 "hvg_pilot_$encoder" "${DEPENDENCY[@]}"
         done
-        echo 'After all three first-fold encoders finish, update remaining_gpu_hours and run encoders.'
+        echo 'After all three first-fold encoders finish, run encoders; its budget gate queries the current GPU quota automatically.'
         ;;
     encoders)
         guard_other_workflow
@@ -392,7 +392,7 @@ PY
             --representations "${OTHER_INPUTS[@]}" "${PILOT_TARGET_ARGS[@]}" --output "$PILOT"
         submit_job pilot_kumo "--dependency=afterok:$LAST_JOB" cluster/pilot.sbatch kumo \
             --representations "${OTHER_INPUTS[@]}" "${PILOT_TARGET_ARGS[@]}" --output "$PILOT"
-        printf 'After all pilots succeed, update the actual remaining GPU-hour budget before submit --execute.\n'
+        printf 'After all pilots succeed, use submit --execute; its budget gate queries the current GPU quota automatically.\n'
         ;;
     submit)
         guard_other_workflow

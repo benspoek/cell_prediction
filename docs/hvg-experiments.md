@@ -73,9 +73,9 @@ zsh cluster/hvg.sh setup
 ```
 
 Use the same configuration as the completed simple TabPFN benchmarks. Keep its
-compute settings unchanged; only `cluster.remaining_gpu_hours` is updated from
-the actual project quota. The new stage does not require editing the configured
-representation list, which preserves compatibility with the existing reports.
+compute settings and configured representation list unchanged, which preserves
+compatibility with existing reports. The budget gate queries the current project
+quota automatically; no quota value needs to be copied into YAML.
 
 Setup requires the existing core and TabPFN environments and completed simple
 TabPFN results. It creates a separate baseline snapshot in
@@ -96,14 +96,11 @@ zsh cluster/hvg.sh status
 Three serial GPU pilot jobs each measure both HVG inputs on two targets in the
 first saved cell fold. Their timings and pilot predictions use
 `results/hvg_workflow/pilot/`, separately from the original and pending pilots.
-Wait for all three pilots to complete, then inspect their logs and update the
-current GPU-hour budget:
+Wait for all three pilots to complete, inspect their logs, and submit:
 
 ```zsh
-r_wlm_usage -q -p thes2301
-nano "$CPP_CONFIG"
-# Set cluster.remaining_gpu_hours to the actual remaining GPU hours.
-
+# Optional: inspect the current quota and its source.
+zsh cluster/run.sh quota
 zsh cluster/hvg.sh submit
 zsh cluster/hvg.sh submit --execute
 zsh cluster/hvg.sh report
@@ -111,8 +108,16 @@ zsh cluster/hvg.sh report
 
 The first submit command previews the 120-task array. `--execute` requires
 matching CUDA pilot measurements for all six input/model pairs and a sufficient
-current budget, including the existing 2× timing margin. It records the array
-ID in `results/hvg_workflow/slurm-jobs.tsv`. The report can be queued immediately;
+current budget, including the existing 2× timing margin. It queries
+`r_wlm_usage -q -p <cluster.account>` immediately before the gate and uses the
+ML section's `Consumable gpu-h` value. A failed quota query blocks submission;
+there is no silent fallback. `quota` shows the account, remaining hours, query
+time and source. To explicitly use the already configured
+`cluster.remaining_gpu_hours`, run
+`CPP_QUOTA_SOURCE=config zsh cluster/hvg.sh submit --execute` and ensure that
+value is current. Neither quota source changes the configuration file or pilot
+fingerprints. The launcher records the array ID in
+`results/hvg_workflow/slurm-jobs.tsv`. The report can be queued immediately;
 it waits for the production array to finish successfully. If the array has
 already left the controller, the launcher checks accounting for all 120 tasks
 before submitting the report.

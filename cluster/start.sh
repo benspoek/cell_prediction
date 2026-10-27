@@ -28,7 +28,7 @@ case "$ACTION" in
             --representations pca128 ion_channels authors25)
         printf 'prepare=%s\nsplits=%s\npilot=%s\n' "$PREPARE" "$SPLITS" "$PILOT" \
             | tee logs/start-pilot-jobs.txt
-        printf 'After the pilot succeeds, set cluster.remaining_gpu_hours, then use submit.\n'
+        printf 'After the pilot succeeds, use submit; executing submission queries the current GPU quota automatically.\n'
         ;;
     submit)
         zsh cluster/run.sh jobs --stage simple --output jobs/simple.tsv

@@ -99,44 +99,46 @@ directory before starting. This covers filtered submission environments without
 depending on the site's export defaults. A new pilot command submits a fresh
 prepare/splits/pilot chain; failed or dependency-cancelled jobs are not resumed.
 
-## 4. Set the actual budget and start the benchmark
+## 4. Check the current quota and start the benchmark
 
-After the pilot completes, check project permissions and available computing
-time:
-
-```zsh
-r_wlm_usage -q -p thes2301
-```
-
-Copy the default configuration to an ignored local file and edit its
-`cluster.remaining_gpu_hours` value to the actual usable remainder. Account for
-already used pilot time, other pending jobs, the GPU/core-hour conversion and
-the sliding quota window. The entire nominal project allocation is not the
-available remainder.
+After the pilot completes, the budget check reads fresh remaining GPU hours
+with `r_wlm_usage -q -p <cluster.account>`. It uses `Consumable gpu-h` from the ML
+section rather than the nominal project allocation. The configured account is
+`thes2301` by default. Keep the configuration used for the pilot;
+there is no need to copy quota values into YAML.
 
 ```zsh
-cp configs/benchmark.yaml configs/cluster.local.yaml
-nano configs/cluster.local.yaml
-export CPP_CONFIG=configs/cluster.local.yaml
-
+# Inspect the account, remaining GPU hours, query time and source:
+zsh cluster/run.sh quota
 # Preview the 60-job array:
 zsh cluster/start.sh submit
-# Check its estimate against your actual remaining GPU hours:
+# Check its estimate against a fresh quota query:
 zsh cluster/run.sh budget --jobs jobs/simple.tsv
-# Submit when the check passes:
+# Query again and submit when the check passes:
 zsh cluster/start.sh submit --execute
 ```
 
-Keep `CPP_ROOT` and `CPP_CONFIG` exported when submitting jobs and restore them
-after reconnecting. Changing only `remaining_gpu_hours` does not invalidate the
-pilot. Do not change model or preprocessing settings between pilot and full
-evaluation; those changes require fresh measurements and output directories.
+Keep `CPP_ROOT` and your existing `CPP_CONFIG` exported when submitting jobs and
+restore them after reconnecting. The default configuration is
+`configs/benchmark.yaml`; if you use an ignored `configs/cluster.local.yaml`, keep
+using that file. Set `cluster.account` for your project before setup and pilots
+when it differs from the default. Quota queries do not edit configuration or
+invalidate pilot measurements. Do not change model or preprocessing settings
+between pilot and full evaluation; those changes require fresh measurements and
+output directories.
+
+A failed or unreadable quota query blocks submission with a clear error. There
+is no automatic fallback to `cluster.remaining_gpu_hours`. To explicitly use an
+already configured remaining-hours value, run
+`CPP_QUOTA_SOURCE=config zsh cluster/start.sh submit --execute`; you are then
+responsible for keeping that value current.
 
 The array runs at most four tasks simultaneously. Each task has one GPU and
 handles one representation/fold with 17 target fits. The 60 tasks cover the
 three representations and both 10-fold protocols. The budget check uses measured
-pilot time with a 2x margin. Its rest-budget input is manual; it does not reserve
-quota globally across multiple arrays. Start one production array at a time.
+pilot time with a 2x margin and queries the quota again before GPU submission.
+It does not reserve quota globally across multiple arrays. Start one production
+array at a time.
 
 ## 5. Generate the report
 

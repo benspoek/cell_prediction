@@ -37,11 +37,23 @@ zsh cluster/pending.sh encoder-pilot
 ```
 
 Setup verifies/reuses existing resources and environments. The encoder pilot
-measures the first HVG fold. After it finishes, refresh the actual project quota
-and run `encoders` to prepare the remaining folds. The `pilot` command then
-exercises all pending input/model pairs on all seventeen targets in one saved
-fold. After it succeeds and the remaining quota is updated, `submit --execute`
-creates the single production array. See the unified guide for exact commands.
+measures the first HVG fold. After it finishes, run `encoders` to prepare the
+remaining folds. Its budget gate automatically queries
+`r_wlm_usage -q -p <cluster.account>` and reads `Consumable gpu-h` from the ML
+section. The `pilot` command then exercises all pending input/model pairs on
+all seventeen targets in one saved fold. After it succeeds, `submit --execute` queries the current
+quota again and creates the single production array if the budget passes. No
+quota values need to be copied into YAML. See the unified guide for exact
+commands.
+
+Use `zsh cluster/run.sh quota` to inspect the account, remaining GPU hours, query
+time and source. A failed query blocks the gate without silently using a
+configured value. If you explicitly choose an already configured
+`cluster.remaining_gpu_hours`, use
+`CPP_QUOTA_SOURCE=config zsh cluster/pending.sh encoders` or
+`CPP_QUOTA_SOURCE=config zsh cluster/pending.sh submit --execute`, and ensure that
+value is current. Quota queries leave configuration and pilot fingerprints
+unchanged.
 
 ## Preserving previous results
 

@@ -16,4 +16,11 @@ if [[ ${1:-} != prefetch ]]; then
     export HF_HUB_OFFLINE=1
     export TRANSFORMERS_OFFLINE=1
 fi
+# Quota is a launcher decision, outside scientific code and its fingerprints.
+case "${1:-}" in
+    quota|budget|hvg-encoder-budget)
+        exec "$PY" "$ROOT/cluster/quota.py" --root "$ROOT" \
+            --config "${CPP_CONFIG:-configs/benchmark.yaml}" "$@"
+        ;;
+esac
 exec "$PY" -m cell_property_prediction.cli --root "$ROOT" --config "${CPP_CONFIG:-configs/benchmark.yaml}" "$@"

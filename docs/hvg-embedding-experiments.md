@@ -70,14 +70,27 @@ be repaired before dependent work proceeds.
 
 ## Encoder budget and remaining folds
 
-After all three encoder pilots finish successfully, refresh the project quota:
+After all three encoder pilots finish successfully, run the encoder gate. It
+queries the current project quota automatically:
 
 ```zsh
-r_wlm_usage -q -p thes2301
-nano "$CPP_CONFIG"
-# Set cluster.remaining_gpu_hours to the actual remaining GPU hours.
+# Optional: inspect the account, remaining GPU hours, query time and source.
+zsh cluster/run.sh quota
 zsh cluster/pending.sh encoders
 ```
+
+Each gate runs `r_wlm_usage -q -p <cluster.account>` afresh and reads
+`Consumable gpu-h` from the ML section. The default account is `thes2301`; keep
+the same account configuration used for setup and pilots. No quota values need to be
+copied into YAML, and the query does not modify configuration or scientific
+fingerprints. A failed or unreadable query blocks the gate with an error; it
+never silently falls back to an older configured value.
+
+If you explicitly need to use an already configured
+`cluster.remaining_gpu_hours`, run
+`CPP_QUOTA_SOURCE=config zsh cluster/pending.sh encoders`. The same override can
+be used with `submit --execute`; you are responsible for keeping the configured
+value current.
 
 The encoder budget uses measured pilot runtimes with a 2x margin for the
 remaining fold encodings. It is a separate check from the later predictor
@@ -107,11 +120,10 @@ and 21-pair timings. The budget fingerprint includes completed fold embeddings
 and panels and excludes temporary UCE working files. Source, model or input
 changes after the pilot require a fresh measurement.
 
-After all model pilots complete, refresh the usable remaining quota again:
+After all model pilots complete, preview and submit production. `--execute`
+queries the usable remaining quota again before submitting:
 
 ```zsh
-r_wlm_usage -q -p thes2301
-nano "$CPP_CONFIG"
 zsh cluster/pending.sh submit
 zsh cluster/pending.sh submit --execute
 zsh cluster/pending.sh report
