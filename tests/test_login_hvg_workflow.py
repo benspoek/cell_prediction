@@ -203,3 +203,18 @@ def test_wrong_host_and_missing_uuid_stop_before_holds(rig, monkeypatch):
     with pytest.raises(RuntimeError, match="UUID"):
         login.run(rig.root, rig.config_path, None, execute=True)
     assert not rig.events
+
+
+@pytest.mark.parametrize("action", ["resume", "release"])
+def test_orphaned_prediction_diagnostic_blocks_hvg_helper(rig, monkeypatch, action):
+    path = rig.root / "diagnostics/login_smoke/latest.json"
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps({"root": str(rig.root), "current": {
+        "process_group": 456, "host": "login23-g-1.example"}}))
+    monkeypatch.setattr(login.os, "killpg", lambda *args: None, raising=False)
+    with pytest.raises(RuntimeError, match="still active"):
+        if action == "resume":
+            execute(rig)
+        else:
+            login.release(rig.root, rig.config_path)
+    assert not rig.events

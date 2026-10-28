@@ -208,6 +208,15 @@ def _no_previous_process(state):
                                "do not start a duplicate. Inspect it before resuming")
 
 
+def _check_smoke_process(root):
+    path = root / "diagnostics/login_smoke/latest.json"
+    if path.is_file():
+        state = json.loads(path.read_text(encoding="utf-8"))
+        if state.get("root") != str(root):
+            raise RuntimeError("Previous prediction diagnostic belongs to another project root")
+        _no_previous_process(state)
+
+
 def _release(root, config, saved, state_path, state):
     _no_previous_process(state)
     rows = _relevant_queue(root, str(config["cluster"]["account"]), saved)
@@ -233,6 +242,7 @@ def release(root, config_path):
     config = load_config(resolve(root, config_path))
     directory = root / "results/pending_workflow"
     with _lock(directory / "login-hvg.lock"):
+        _check_smoke_process(root)
         state_path = directory / "login-hvg.json"
         state = json.loads(state_path.read_text(encoding="utf-8"))
         if state.get("root") != str(root):
@@ -261,6 +271,7 @@ def run(root, config_path, gpu, execute=False, max_folds=None):
     directory = root / "results/pending_workflow"
     state_path = directory / "login-hvg.json"
     with _lock(directory / "login-hvg.lock"):
+        _check_smoke_process(root)
         rows = _relevant_queue(root, str(config["cluster"]["account"]), saved)
         if not execute:
             tasks = _missing(config, root)

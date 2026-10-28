@@ -298,3 +298,65 @@ Do not delete partial immutable artifacts or the saved Slurm history to bypass
 a validation or active-writer error. If cancellation has not yet disappeared
 from the controller, wait briefly and rerun the helper to confirm completion
 before submitting replacement pilots.
+
+
+## Small prediction timing test on the GPU login node
+
+`cluster/login_smoke.py` is a bounded diagnostic for TabPFN, LimiX and Kumo.
+It leaves the queued full prediction pilots in place and never calls Slurm to
+hold, cancel or submit anything. It uses the existing model environments and
+unchanged production model settings (including eight estimators/pipelines).
+Each model predicts the first two targets, AP amplitude and AP amplitude
+adaptation index, on the first saved cell fold with two representations:
+HVG-PCA128 (128 features) and full GenePT (3,072 features). That is four target
+evaluations per model, twelve across all three.
+
+Run on `login23-g-1`, inside tmux. Inspect `nvidia-smi -L` and `nvidia-smi`
+before selecting an available GPU UUID. After pulling the latest repository:
+
+```zsh
+cd ~/SMPC/cell_prediction
+export CPP_ROOT="$PWD"
+export CPP_CONFIG=configs/cluster.local.yaml
+.venvs/core/bin/python cluster/login_smoke.py
+```
+
+The last command previews the scope. To execute, replace the placeholder with
+an available UUID from your own current output:
+
+```zsh
+export CPP_LOGIN_GPU='GPU-REPLACE-WITH-AVAILABLE-UUID'
+.venvs/core/bin/python cluster/login_smoke.py --execute --gpu "$CPP_LOGIN_GPU"
+```
+
+The entire native test sequence has a **ten-minute deadline**, rather than ten
+minutes per model. Each model receives only the remaining time. Models run
+serially on one GPU, with inherited affinity to at most four CPUs and thread
+limits set before scientific imports. Downloads are disabled. Ctrl+C, SIGTERM,
+SIGHUP and timeout stop the whole active native process group. A common lock
+prevents overlap with the manual HVG encoder runner, and a recorded live process
+group prevents launching another diagnostic after a hard-killed supervisor.
+Normal shared-node limits and fair use still apply; see the
+[RWTH login guidance](https://help.itc.rwth-aachen.de/en/service/rhr4fjjutttf/article/0a23d513f31b4cf1849986aaed475789/).
+
+Outputs are unique per invocation under `diagnostics/login_smoke/`, outside the
+production results tree. This directory is ignored by Git. Inspect the summary:
+
+```zsh
+cat diagnostics/login_smoke/latest.json
+```
+
+It includes each model's wall time, per-representation timings, device and
+PyTorch versions, and peak PyTorch allocated/reserved GPU memory. These peaks
+measure the PyTorch allocator, not total process VRAM. Logs and partial outputs
+remain available after failure; stop and inspect the recorded log before
+retrying. A retry creates a fresh diagnostic run, so its timing is not taken
+from cached target predictions. `--predictors tabpfn` (or `limix` or `kumo`) can
+restrict a follow-up test to one model.
+
+This is a small runtime/compatibility check. Its two-target timings are not
+merged into `results/pending_workflow/pilot_with_hvg_encoders/timings.json` and
+cannot replace the complete seventeen-target pilot or its production budget
+gate. Different representations may cost more time or GPU memory, and reduced
+CPU availability may change timing relative to a batch node. Continue monitoring
+the original pilots as usual; no benchmark resubmission is needed for this test.

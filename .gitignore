@@ -18,3 +18,4 @@ dist/
 build/
 *.sif
 .cache/
+/diagnostics/login_smoke/
