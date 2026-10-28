@@ -16,6 +16,8 @@ import yaml
 from cell_property_prediction import config as config_module
 
 REPO = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(REPO / "cluster"))
+import limix_cache
 SPEC = importlib.util.spec_from_file_location("login_smoke_test", REPO / "cluster/login_smoke.py")
 smoke = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(smoke)
@@ -35,6 +37,7 @@ def rig(tmp_path, monkeypatch):
         python.parent.mkdir(parents=True)
         python.touch()
     calls = []
+    monkeypatch.setattr(limix_cache, "ensure", lambda *args, **kwargs: {"status": "verified"})
     monkeypatch.setattr(smoke.controls, "_bound_cpus", lambda: [0, 1, 2, 3])
     monkeypatch.setattr(smoke.controls, "_lock", lambda path: nullcontext())
     monkeypatch.setattr(smoke.socket, "gethostname", lambda: "login23-g-1.example")
@@ -102,7 +105,7 @@ def test_three_models_are_serial_and_outputs_never_touch_production(rig):
 
 
 def test_each_model_receives_only_the_remaining_total_deadline(rig, monkeypatch):
-    clock = iter([100, 101, 151, 201])
+    clock = iter([100, 101, 150, 151, 201])
     monkeypatch.setattr(smoke.time, "monotonic", lambda: next(clock))
     execute(rig)
     assert [call[4] for call in rig.calls] == [599, 549, 499]
@@ -195,3 +198,11 @@ def test_live_orphaned_hvg_encoder_also_blocks_new_smoke_run(rig, monkeypatch):
     with pytest.raises(RuntimeError, match="still active"):
         execute(rig)
     assert not rig.calls
+
+
+def test_cache_setup_time_is_counted_against_diagnostic_deadline(rig, monkeypatch):
+    clock = iter([100, 101, 110, 701])
+    monkeypatch.setattr(smoke.time, "monotonic", lambda: next(clock))
+    with pytest.raises(RuntimeError, match="budget is exhausted"):
+        execute(rig)
+    assert len(rig.calls) == 1

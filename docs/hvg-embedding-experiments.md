@@ -360,3 +360,46 @@ cannot replace the complete seventeen-target pilot or its production budget
 gate. Different representations may cost more time or GPU memory, and reduced
 CPU availability may change timing relative to a batch node. Continue monitoring
 the original pilots as usual; no benchmark resubmission is needed for this test.
+
+
+## LimiX native cache permission recovery
+
+A frozen LimiX-2 revision constructs its cache manager with the developer-local
+path `/mnt/public/lijiansheng0830cache`, even when the adapter passes
+`use_data_cache=False`. On CLAIX this fails during predictor construction with
+`PermissionError: [Errno 13] Permission denied: '/mnt/public'`.
+
+The operational helper `cluster/limix_cache.py` replaces only that one path
+literal with `<configured cache_dir>/limix_native`, resolved through the existing
+cache symlink. It verifies the frozen vendor Git revision and original source,
+retains every other source byte, and rejects unrelated edits. Original bytes,
+an exact diff, before/after SHA256 hashes and the vendor revision are retained
+under `logs/runtime_patches/`, outside the hashed vendor tree. The checkpoint,
+inference configuration, disabled data caching and model settings are unchanged.
+
+After the failed dependency chain is inactive, recover without rerunning setup:
+
+```zsh
+cd ~/SMPC/cell_prediction
+git pull --ff-only
+export CPP_ROOT="$PWD"
+export CPP_CONFIG=configs/cluster.local.yaml
+.venvs/core/bin/python cluster/limix_cache.py --apply
+zsh cluster/pending.sh pilot
+```
+
+The pilot launcher performs the same idempotent check before submission, and
+the login smoke test checks it before starting LimiX. Applying a new patch is
+blocked while a project prediction job runs. Queued jobs and running encoder
+jobs are left alone. If downstream jobs remain active, the existing launcher
+stops rather than submitting duplicates; inspect `pending.sh status` first.
+
+The common pilot fingerprint and completed TabPFN outputs are preserved because
+no package source, benchmark configuration or model manifest is changed. The
+LimiX fold provenance does hash vendor source files, so it records the patched
+bytes. If any LimiX prediction/manifest or common LimiX timing already exists,
+the first application stops for provenance review rather than mixing old and
+new contexts. This constructor failure normally leaves no completed LimiX
+prediction. The successful TabPFN timing records are reused, then LimiX retries
+and Kumo follows after LimiX succeeds. This fixes cache initialization only;
+later native model failures still require their own log diagnosis.

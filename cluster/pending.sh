@@ -370,6 +370,7 @@ PY
         guard_other_workflow
         guard_active "${DOWNSTREAM_STAGES[@]}"
         preserved
+        "$PY" cluster/limix_cache.py --root "$ROOT" --config "$CPP_CONFIG" --apply
         for environment in limix kumo; do
             [[ -x "$ROOT/.venvs/$environment/bin/python" ]] || {
                 echo "Missing $environment environment. Run zsh $LAUNCHER setup first." >&2; exit 2;

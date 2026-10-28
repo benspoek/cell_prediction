@@ -133,6 +133,11 @@ def run(root, config_path, gpu=None, *, execute=False, predictors=PREDICTORS):
         deadline = time.monotonic() + TOTAL_SECONDS
         try:
             for predictor in predictors:
+                if predictor == "limix":
+                    if time.monotonic() >= deadline:
+                        raise RuntimeError("The ten-minute diagnostic budget is exhausted")
+                    from limix_cache import ensure as ensure_limix_cache
+                    ensure_limix_cache(config, root, apply=True)
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     raise RuntimeError("The ten-minute diagnostic budget is exhausted")

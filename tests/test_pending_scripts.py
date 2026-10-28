@@ -70,6 +70,8 @@ def pending_cluster(tmp_path):
         "    for index in range(count):\n"
         "        code = '1:0' if index == 2 and os.environ.get('MOCK_ACCOUNTING_BAD_EXIT') else '0:0'\n"
         "        print(f'{job}_{index}|COMPLETED|{code}')\n"
+        "elif command == 'cache-fix' and os.environ.get('MOCK_LIMIX_CACHE_FAIL'):\n"
+        "    sys.exit('native cache patch could not be verified')\n"
         "elif command == 'state':\n"
         "    if args[0] == 'snapshot':\n"
         "        if os.environ.get('MOCK_SNAPSHOT_FAIL'): sys.exit('baseline incomplete')\n"
@@ -122,6 +124,11 @@ def pending_cluster(tmp_path):
     (root / "cluster/pending_state.py").write_text(
         "import runpy, sys\n"
         f"sys.argv = [{str(helper)!r}, 'state', *sys.argv[1:]]\n"
+        f"runpy.run_path({str(helper)!r}, run_name='__main__')\n"
+    )
+    (root / "cluster/limix_cache.py").write_text(
+        "import runpy, sys\n"
+        f"sys.argv = [{str(helper)!r}, 'cache-fix', *sys.argv[1:]]\n"
         f"runpy.run_path({str(helper)!r}, run_name='__main__')\n"
     )
     env = {k: v for k, v in os.environ.items() if not k.startswith(("CPP_", "SLURM_", "MOCK_"))}
@@ -470,3 +477,11 @@ def test_combined_submit_creates_one_production_array_for_all_600_tasks(pending_
                if call["command"] == "run" and call["args"][0] == "budget"]
     assert len(budgets) == 1
     assert budgets[0]["args"][3:5] == ["--pilot", PILOT]
+
+
+def test_pilot_verifies_native_cache_before_any_submission(pending_cluster):
+    result = invoke(pending_cluster, "pilot", MOCK_LIMIX_CACHE_FAIL="1")
+    assert result.returncode != 0 and "cache patch" in result.stderr
+    assert submitted(pending_cluster) == []
+    [call] = [row for row in records(pending_cluster) if row["command"] == "cache-fix"]
+    assert call["args"] == ["--root", str(pending_cluster[0]), "--config", "configs/custom config.yaml", "--apply"]
