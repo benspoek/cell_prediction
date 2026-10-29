@@ -19,3 +19,4 @@ build/
 *.sif
 .cache/
 /diagnostics/login_smoke/
+/diagnostics/pilot_report/

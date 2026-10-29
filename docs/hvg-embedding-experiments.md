@@ -403,3 +403,30 @@ new contexts. This constructor failure normally leaves no completed LimiX
 prediction. The successful TabPFN timing records are reused, then LimiX retries
 and Kumo follows after LimiX succeeds. This fixes cache initialization only;
 later native model failures still require their own log diagnosis.
+
+## Exploratory pilot comparison
+
+Once the combined thirty-pair, seventeen-target pilot is complete, compare its
+saved predictions without running any models:
+
+```zsh
+cd ~/SMPC/cell_prediction
+git pull --ff-only
+.venvs/core/bin/python cluster/pilot_report.py
+```
+
+The helper validates the timing fingerprint, prediction checksums, configuration,
+target/metadata/split inputs, and identical complete cell/target coverage. It adds
+the three original TabPFN representations using their saved **cell-CV fold zero**,
+so all 33 methods use the same test cells. It does not compare a pilot fold against
+the original full-OOF scores. Outputs under `diagnostics/pilot_report/` include
+`summary.csv`, `per_target.csv`, `macro_r2_matrix.csv` and a provenance manifest.
+
+The primary metric is the mean of all seventeen raw-scale per-target R2 values.
+The secondary column `authors_joint_r2_fold` reuses the production joint scoring
+definition, with full-cohort transformed target scales and fold-zero training
+means. It is the single fold's score, not the ten-fold mean. All methods remain
+`complete_oof=False`; there are no significance claims or confidence intervals.
+This early comparison says nothing about mouse-held-out performance. No scientific
+package, benchmark configuration, production predictions, pilot timings or Slurm
+jobs are changed, so the queued benchmark's fingerprints remain valid.
